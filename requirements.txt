@@ -1,0 +1,13 @@
+# `pinocchio` is conda-forge only, so the environment is created with conda and
+# everything below is what pip would install into it:
+#
+#   conda create -n milling_env -c conda-forge python=3.11 pinocchio numpy scipy \
+#       numba matplotlib shapely dill
+#   conda activate milling_env
+#
+numpy>=1.24
+scipy>=1.10         # expm, the RK4 helpers, Rotation
+numba>=0.57         # the dexel step kernel, fastsim/process.py
+shapely>=2.0        # engagement angles, stabsim/engagement.py
+dill>=0.3           # the pickled workpiece outlines
+matplotlib>=3.7     # not imported by any run; only if you plot the results yourself

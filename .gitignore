@@ -1,0 +1,24 @@
+__pycache__/
+*.py[cod]
+*.nbc
+*.nbi
+.pytest_cache/
+.mypy_cache/
+
+# run outputs — regenerate with `python main.py`
+out/
+out_*/
+results/
+
+# the constant-feed toolpath is built by `analysis.toolpath.ensure` on demand
+data/toolpaths/*.npz
+
+*.png
+*.svg
+*.pdf
+
+.venv/
+.vscode/
+.idea/
+.env
+.DS_Store

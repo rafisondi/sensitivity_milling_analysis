@@ -1,0 +1,106 @@
+{
+  "name": "sensitivity_base",
+  "sim": {
+    "sim_dt": 0.0002,
+    "plan_dt": 0.001,
+    "duration_s": 2.0
+  },
+  "scene": {
+    "placed_by_hand": false,
+    "origin_i_m": [
+      -1.665486759690112e-16,
+      -1.6474000255922296,
+      0.4806981213437843
+    ],
+    "R_iw_rpy_deg": [
+      0.0,
+      0.0,
+      -90.0
+    ],
+    "R_cut_rpy_deg": [
+      0.0,
+      0.0,
+      -90.0
+    ],
+    "R_w_tcp_rpy_deg": [
+      180.0,
+      0.0,
+      180.0
+    ],
+    "start_deg": [
+      -90.0,
+      30.0,
+      95.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "ee_frame": "TCP",
+    "gravity_on": false,
+    "robot_model": "joints123",
+    "urdf_path": null
+  },
+  "mill": {
+    "workpiece": "rect_edge_100x60",
+    "height_mm": 1.0,
+    "diameter_mm": 16.0,
+    "n_teeth": 4,
+    "helix_angle_deg": 45.0,
+    "Ktc": 1930.4,
+    "Krc": 1159.6,
+    "Kac": 200.6,
+    "spindle_spin": -1,
+    "spindle_rpm": 3333.0,
+    "feed_mm_s": 40.0,
+    "radial_engagement_mm": 5.0,
+    "sim_dt": 0.0002,
+    "plan_dt": 0.001,
+    "raster_mm": 0.02,
+    "slice_angle_deg": 10.0,
+    "warmup_revs": 5,
+    "chip_mode": "dexel",
+    "n_phi": 2048,
+    "max_chip_mm": 2.0,
+    "moment_about": "workpiece_origin",
+    "parallel": null
+  },
+  "part": {
+    "length_mm": 100.0,
+    "width_mm": 60.0,
+    "height_mm": 1.0,
+    "name": "rect_edge_100x60",
+    "pickle": null
+  },
+  "path": {
+    "n_edges": 1,
+    "start_edge": 0,
+    "lead_in_mm": 25.0,
+    "lead_out_mm": 25.0,
+    "speed_mm_s": 40.0,
+    "place_by_fk": true,
+    "toolpath": null
+  },
+  "start": {
+    "pos_m": [
+      -0.025,
+      -1.6224,
+      0.4857
+    ],
+    "rpy_deg": null,
+    "joints_deg": null,
+    "ik_seed_deg": [
+      -90.0,
+      30.0,
+      95.0,
+      0.0,
+      0.0,
+      0.0
+    ]
+  },
+  "io": {
+    "out_dir": "out",
+    "workpiece_dir": "data/workpieces",
+    "toolpath_dir": "data/toolpaths",
+    "stamp_runs": false
+  }
+}

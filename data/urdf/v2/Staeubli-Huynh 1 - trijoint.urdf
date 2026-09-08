@@ -1,0 +1,356 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<robot name="Staeubli-Huynh-trijoint">
+  <link name="Base">
+    <inertial>
+      <origin xyz="0.007 0.001 0.119" rpy="0.0 -0.0 0.0" />
+      <mass value="226.2" />
+      <inertia ixx="8.303" ixy="0.0" ixz="-0.012" iyy="7.979" iyz="0.0" izz="11.869" />
+    </inertial>
+    <visual>
+      <geometry>
+        <mesh filename="meshes/Base.stl" scale="0.001 0.001 0.001" />
+      </geometry>
+      <origin xyz="0.0 0.0 0.0" rpy="0.0 -0.0 0.0" />
+    </visual>
+  </link>
+  <link name="Link 1">
+    <inertial>
+      <origin xyz="0.15 -0.008 0.209" rpy="0.0 -0.0 0.0" />
+      <mass value="364.0" />
+      <inertia ixx="12.248" ixy="-0.204" ixz="1.552" iyy="17.833" iyz="0.25" izz="16.95" />
+    </inertial>
+    <visual>
+      <geometry>
+        <mesh filename="meshes/J1.stl" scale="0.001 0.001 0.001" />
+      </geometry>
+      <origin xyz="0.0 0.0 0.29800000000000004" rpy="0.0 -0.0 0.0" />
+    </visual>
+  </link>
+  <link name="Link 2">
+    <inertial>
+      <origin xyz="0.401 0.007 0.139" rpy="0.0 -0.0 0.0" />
+      <mass value="256.1" />
+      <inertia ixx="6.574" ixy="0.178" ixz="0.741" iyy="36.584" iyz="0.054" izz="39.916" />
+    </inertial>
+    <visual>
+      <geometry>
+        <mesh filename="meshes/J2.stl" scale="0.001 0.001 0.001" />
+      </geometry>
+      <origin xyz="1.1102230246251565e-16 0.0 -0.235" rpy="-1.5040389444259048e-49 -0.0 0.0" />
+    </visual>
+  </link>
+  <link name="Link 3">
+    <inertial>
+      <origin xyz="0.039 0.043 -0.219" rpy="0.0 -0.0 0.0" />
+      <mass value="98.7" />
+      <inertia ixx="0.569" ixy="0.073" ixz="-0.018" iyy="0.462" iyz="-0.025" izz="0.512" />
+    </inertial>
+    <visual>
+      <geometry>
+        <mesh filename="meshes/J3.stl" scale="0.001 0.001 0.001" />
+      </geometry>
+      <origin xyz="0.0 -2.220446049250313e-16 -0.27899999999999997" rpy="1.5707963267948966 -0.0 0.0" />
+    </visual>
+  </link>
+  <link name="Link 4">
+    <inertial>
+      <origin xyz="0.0 0.004 0.266" rpy="0.0 -0.0 0.0" />
+      <mass value="40.8" />
+      <inertia ixx="1.23" ixy="0.001" ixz="0.0" iyy="1.172" iyz="0.062" izz="0.299" />
+    </inertial>
+    <visual>
+      <geometry>
+        <mesh filename="meshes/J4.stl" scale="0.001 0.001 0.001" />
+      </geometry>
+      <origin xyz="0.0 5.285157950301638e-17 -0.17899999999999983" rpy="0.0 -0.0 0.0" />
+    </visual>
+  </link>
+  <link name="Link 5">
+    <inertial>
+      <origin xyz="0.0 -0.067 0.0" rpy="0.0 -0.0 0.0" />
+      <mass value="13.6" />
+      <inertia ixx="0.026" ixy="0.0" ixz="0.0" iyy="0.016" iyz="0.0" izz="0.026" />
+    </inertial>
+    <visual>
+      <geometry>
+        <mesh filename="meshes/J5.stl" scale="0.001 0.001 0.001" />
+      </geometry>
+      <origin xyz="0.0 -4.440892098500626e-16 5.2851579503016407e-17" rpy="1.5707963267948966 -0.0 0.0" />
+    </visual>
+  </link>
+  <link name="Link 6">
+    <inertial>
+      <origin xyz="0.0 0.0 0.005" rpy="0.0 -0.0 0.0" />
+      <mass value="0.6" />
+      <inertia ixx="0.0005" ixy="0.0" ixz="0.0" iyy="0.0005" iyz="0.0" izz="0.001" />
+    </inertial>
+    <visual>
+      <geometry>
+        <mesh filename="meshes/J6.stl" scale="0.001 0.001 0.001" />
+      </geometry>
+      <origin xyz="0.0 6.368970367547046e-17 0.017000000000000404" rpy="0.0 -0.0 0.0" />
+    </visual>
+  </link>
+  <link name="EE">
+    <inertial>
+      <origin xyz="0.0 0.0 0.0" rpy="0.0 -0.0 0.0" />
+      <mass value="0.0" />
+      <inertia ixx="0.0" ixy="0.0" ixz="0.0" iyy="0.0" iyz="0.0" izz="0.0" />
+    </inertial>
+  </link>
+  <link name="Spindle">
+    <inertial>
+      <origin xyz="-0.048 -0.001 0.173" rpy="0.0 -0.0 0.0" />
+      <mass value="61.4" />
+      <inertia ixx="1.342" ixy="0.002" ixz="0.016" iyy="1.622" iyz="0.018" izz="0.548" />
+    </inertial>
+  </link>
+  <link name="TCP">
+    <inertial>
+      <origin xyz="0.0 0.0 0.0" rpy="0.0 -0.0 0.0" />
+      <mass value="0.0" />
+      <inertia ixx="0.0" ixy="0.0" ixz="0.0" iyy="0.0" iyz="0.0" izz="0.0" />
+    </inertial>
+  </link>
+  <link name="Acquisition">
+    <inertial>
+      <origin xyz="-0.141 -0.054 0.285" rpy="0.0 -0.0 0.0" />
+      <mass value="5.4" />
+      <inertia ixx="0.078" ixy="0.002" ixz="0.0" iyy="0.024" iyz="0.005" izz="0.058" />
+    </inertial>
+  </link>
+  <joint name="Joint 1" type="revolute">
+    <limit effort="1000.0" velocity="10.0" lower="-3.141592653589793" upper="3.141592653589793" />
+    <parent link="Base" />
+    <child link="Link 1 vx" />
+    <axis xyz="0. 0. 1." />
+    <origin xyz="0.0 0.0 0.344" rpy="0.0 -0.0 0.0" />
+  </joint>
+  <joint name="Joint 2" type="revolute">
+    <limit effort="1000.0" velocity="10.0" lower="-3.141592653589793" upper="3.141592653589793" />
+    <parent link="Link 1" />
+    <child link="Link 2 vx" />
+    <axis xyz="0. 0. 1." />
+    <origin xyz="0.25 0.235 0.298" rpy="-1.5707963267948966 -1.5707963267948966 0.0" />
+  </joint>
+  <joint name="Joint 3" type="revolute">
+    <limit effort="1000.0" velocity="10.0" lower="-3.141592653589793" upper="3.141592653589793" />
+    <parent link="Link 2" />
+    <child link="Link 3 vx" />
+    <axis xyz="0. 0. 1." />
+    <origin xyz="0.95 0.0 0.044" rpy="0.0 -0.0 1.5707963267948966" />
+  </joint>
+  <joint name="Joint 4" type="revolute">
+    <limit effort="1000.0" velocity="10.0" lower="-3.141592653589793" upper="3.141592653589793" />
+    <parent link="Link 3" />
+    <child link="Link 4 vx" />
+    <axis xyz="0. 0. 1." />
+    <origin xyz="0.0 -0.179 -0.279" rpy="1.5707963267948966 -0.0 0.0" />
+  </joint>
+  <joint name="Joint 5" type="revolute">
+    <limit effort="1000.0" velocity="10.0" lower="-3.141592653589793" upper="3.141592653589793" />
+    <parent link="Link 4" />
+    <child link="Link 5 vx" />
+    <axis xyz="0. 0. 1." />
+    <origin xyz="0.0 0.0 0.621" rpy="-1.5707963267948966 -0.0 0.0" />
+  </joint>
+  <joint name="Joint 6" type="revolute">
+    <limit effort="1000.0" velocity="10.0" lower="-3.141592653589793" upper="3.141592653589793" />
+    <parent link="Link 5" />
+    <child link="Link 6 vx" />
+    <axis xyz="0. 0. 1." />
+    <origin xyz="0.0 -0.177 0.0" rpy="1.5707963267948966 -0.0 0.0" />
+  </joint>
+  <joint name="Link 6 to EE" type="fixed">
+    <parent link="Link 6" />
+    <child link="EE" />
+    <axis xyz="1. 0. 0." />
+    <origin xyz="0.0 0.0 0.017" rpy="0.0 -0.0 0.0" />
+  </joint>
+  <joint name="EE to Spindle" type="fixed">
+    <parent link="EE" />
+    <child link="Spindle" />
+    <axis xyz="1. 0. 0." />
+    <origin xyz="0.0 0.0 0.0" rpy="0.0 -0.0 0.0" />
+  </joint>
+  <joint name="EE to TCP" type="fixed">
+    <parent link="EE" />
+    <child link="TCP" />
+    <axis xyz="1. 0. 0." />
+    <origin xyz="0.277 0.0 0.326" rpy="0.0 1.3089969389957474 0.0" />
+  </joint>
+  <joint name="Link 4 to Acquisition" type="fixed">
+    <parent link="Link 4" />
+    <child link="Acquisition" />
+    <axis xyz="1. 0. 0." />
+    <origin xyz="0.0 0.0 0.0" rpy="0.0 -0.0 0.0" />
+  </joint>
+  <link name="Link 1 vx">
+    <inertial>
+      <origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" />
+      <mass value="0.0" />
+      <inertia ixx="0.0" ixy="0.0" ixz="0.0" iyy="0.0" iyz="0.0" izz="0.0" />
+    </inertial>
+  </link>
+  <link name="Link 1 vy">
+    <inertial>
+      <origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" />
+      <mass value="0.0" />
+      <inertia ixx="0.0" ixy="0.0" ixz="0.0" iyy="0.0" iyz="0.0" izz="0.0" />
+    </inertial>
+  </link>
+  <joint name="Joint 1 bx" type="revolute">
+    <limit effort="1000.0" velocity="10.0" lower="-0.1" upper="0.1" />
+    <parent link="Link 1 vx" />
+    <child link="Link 1 vy" />
+    <axis xyz="1. 0. 0." />
+    <origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" />
+  </joint>
+  <joint name="Joint 1 by" type="revolute">
+    <limit effort="1000.0" velocity="10.0" lower="-0.1" upper="0.1" />
+    <parent link="Link 1 vy" />
+    <child link="Link 1" />
+    <axis xyz="0. 1. 0." />
+    <origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" />
+  </joint>
+  <link name="Link 2 vx">
+    <inertial>
+      <origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" />
+      <mass value="0.0" />
+      <inertia ixx="0.0" ixy="0.0" ixz="0.0" iyy="0.0" iyz="0.0" izz="0.0" />
+    </inertial>
+  </link>
+  <link name="Link 2 vy">
+    <inertial>
+      <origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" />
+      <mass value="0.0" />
+      <inertia ixx="0.0" ixy="0.0" ixz="0.0" iyy="0.0" iyz="0.0" izz="0.0" />
+    </inertial>
+  </link>
+  <joint name="Joint 2 bx" type="revolute">
+    <limit effort="1000.0" velocity="10.0" lower="-0.1" upper="0.1" />
+    <parent link="Link 2 vx" />
+    <child link="Link 2 vy" />
+    <axis xyz="1. 0. 0." />
+    <origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" />
+  </joint>
+  <joint name="Joint 2 by" type="revolute">
+    <limit effort="1000.0" velocity="10.0" lower="-0.1" upper="0.1" />
+    <parent link="Link 2 vy" />
+    <child link="Link 2" />
+    <axis xyz="0. 1. 0." />
+    <origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" />
+  </joint>
+  <link name="Link 3 vx">
+    <inertial>
+      <origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" />
+      <mass value="0.0" />
+      <inertia ixx="0.0" ixy="0.0" ixz="0.0" iyy="0.0" iyz="0.0" izz="0.0" />
+    </inertial>
+  </link>
+  <link name="Link 3 vy">
+    <inertial>
+      <origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" />
+      <mass value="0.0" />
+      <inertia ixx="0.0" ixy="0.0" ixz="0.0" iyy="0.0" iyz="0.0" izz="0.0" />
+    </inertial>
+  </link>
+  <joint name="Joint 3 bx" type="revolute">
+    <limit effort="1000.0" velocity="10.0" lower="-0.1" upper="0.1" />
+    <parent link="Link 3 vx" />
+    <child link="Link 3 vy" />
+    <axis xyz="1. 0. 0." />
+    <origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" />
+  </joint>
+  <joint name="Joint 3 by" type="revolute">
+    <limit effort="1000.0" velocity="10.0" lower="-0.1" upper="0.1" />
+    <parent link="Link 3 vy" />
+    <child link="Link 3" />
+    <axis xyz="0. 1. 0." />
+    <origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" />
+  </joint>
+  <link name="Link 4 vx">
+    <inertial>
+      <origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" />
+      <mass value="0.0" />
+      <inertia ixx="0.0" ixy="0.0" ixz="0.0" iyy="0.0" iyz="0.0" izz="0.0" />
+    </inertial>
+  </link>
+  <link name="Link 4 vy">
+    <inertial>
+      <origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" />
+      <mass value="0.0" />
+      <inertia ixx="0.0" ixy="0.0" ixz="0.0" iyy="0.0" iyz="0.0" izz="0.0" />
+    </inertial>
+  </link>
+  <joint name="Joint 4 bx" type="revolute">
+    <limit effort="1000.0" velocity="10.0" lower="-0.1" upper="0.1" />
+    <parent link="Link 4 vx" />
+    <child link="Link 4 vy" />
+    <axis xyz="1. 0. 0." />
+    <origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" />
+  </joint>
+  <joint name="Joint 4 by" type="revolute">
+    <limit effort="1000.0" velocity="10.0" lower="-0.1" upper="0.1" />
+    <parent link="Link 4 vy" />
+    <child link="Link 4" />
+    <axis xyz="0. 1. 0." />
+    <origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" />
+  </joint>
+  <link name="Link 5 vx">
+    <inertial>
+      <origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" />
+      <mass value="0.0" />
+      <inertia ixx="0.0" ixy="0.0" ixz="0.0" iyy="0.0" iyz="0.0" izz="0.0" />
+    </inertial>
+  </link>
+  <link name="Link 5 vy">
+    <inertial>
+      <origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" />
+      <mass value="0.0" />
+      <inertia ixx="0.0" ixy="0.0" ixz="0.0" iyy="0.0" iyz="0.0" izz="0.0" />
+    </inertial>
+  </link>
+  <joint name="Joint 5 bx" type="revolute">
+    <limit effort="1000.0" velocity="10.0" lower="-0.1" upper="0.1" />
+    <parent link="Link 5 vx" />
+    <child link="Link 5 vy" />
+    <axis xyz="1. 0. 0." />
+    <origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" />
+  </joint>
+  <joint name="Joint 5 by" type="revolute">
+    <limit effort="1000.0" velocity="10.0" lower="-0.1" upper="0.1" />
+    <parent link="Link 5 vy" />
+    <child link="Link 5" />
+    <axis xyz="0. 1. 0." />
+    <origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" />
+  </joint>
+  <link name="Link 6 vx">
+    <inertial>
+      <origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" />
+      <mass value="0.0" />
+      <inertia ixx="0.0" ixy="0.0" ixz="0.0" iyy="0.0" iyz="0.0" izz="0.0" />
+    </inertial>
+  </link>
+  <link name="Link 6 vy">
+    <inertial>
+      <origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" />
+      <mass value="0.0" />
+      <inertia ixx="0.0" ixy="0.0" ixz="0.0" iyy="0.0" iyz="0.0" izz="0.0" />
+    </inertial>
+  </link>
+  <joint name="Joint 6 bx" type="revolute">
+    <limit effort="1000.0" velocity="10.0" lower="-0.1" upper="0.1" />
+    <parent link="Link 6 vx" />
+    <child link="Link 6 vy" />
+    <axis xyz="1. 0. 0." />
+    <origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" />
+  </joint>
+  <joint name="Joint 6 by" type="revolute">
+    <limit effort="1000.0" velocity="10.0" lower="-0.1" upper="0.1" />
+    <parent link="Link 6 vy" />
+    <child link="Link 6" />
+    <axis xyz="0. 1. 0." />
+    <origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" />
+  </joint>
+</robot>
