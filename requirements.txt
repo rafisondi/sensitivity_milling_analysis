@@ -11,3 +11,8 @@ numba>=0.57         # the dexel step kernel, fastsim/process.py
 shapely>=2.0        # engagement angles, stabsim/engagement.py
 dill>=0.3           # the pickled workpiece outlines
 matplotlib>=3.7     # not imported by any run; only if you plot the results yourself
+
+# only for notebooks/explore_run.ipynb, which reads what a run left in out/:
+pandas>=2.0         # the CSVs
+plotly>=5.23        # the figures (needs title.subtitle and legend2)
+nbformat>=4.4       # plotly's notebook renderer refuses to draw without it

@@ -61,6 +61,18 @@ def parse_args(argv=None):
     g.add_argument("--rpm", type=float, default=None, help="spindle speed")
     g.add_argument("--feed", type=float, default=None, metavar="MM_S",
                    help="max feed [mm/s]; regenerates the toolpath")
+    g.add_argument("--teeth", type=int, default=None, metavar="N",
+                   help="flutes on the cutter")
+    g.add_argument("--fz", type=float, default=None, metavar="MM",
+                   help="chip load [mm/tooth]; sets the feed from the rpm and "
+                        "the tooth count instead of the other way round. "
+                        "Mutually exclusive with --feed")
+    g.add_argument("--steps-per-tooth", type=float, default=None, metavar="N",
+                   help="set sim_dt from the TOOTH PERIOD, dt = 60/(rpm N spt), "
+                        "so a tooth-passing sweep stays equally resolved at "
+                        "every point. Overrides --sim-dt; capped at "
+                        f"{acfg.MAX_SIM_DT:g} s so the arm's own modes stay "
+                        "resolved at the slow corner")
     g.add_argument("--ktc", type=float, default=None, help="Ktc [N/mm^2]")
     g.add_argument("--krc", type=float, default=None, help="Krc [N/mm^2]")
     g.add_argument("--sim-dt", type=float, default=None, help="integration step [s]")
@@ -95,14 +107,22 @@ def parse_args(argv=None):
     g.add_argument("--csv-decimate", type=int, default=10, metavar="N",
                    help="keep every N-th sample in timeseries.csv (the npz "
                         "always holds every sample)")
+    g.add_argument("--no-plots", action="store_true",
+                   help="skip the figures (nothing is imported from matplotlib)")
     g.add_argument("--verbose", action="store_true")
     return p.parse_args(argv)
 
 
 def default_name(cfg, compensated) -> str:
+    """The run directory, named after the operating point it is.
+
+    The TOOTH COUNT is in the name because it is a swept variable, not a fixed
+    property of the shop: two runs that differ only in `N` are a different cut
+    at the same feed, and without `z` in the name they would collide in `out/`.
+    """
     m = cfg.milling()
     return (f"ap{cfg.part.height_mm:g}_ae{m.radial_engagement_mm:g}"
-            f"_rpm{m.spindle_rpm:g}_f{m.feed_mm_s:g}"
+            f"_rpm{m.spindle_rpm:g}_z{m.n_teeth:g}_f{m.feed_mm_s:g}"
             f"_{'comp' if compensated else 'plain'}").replace(".", "p")
 
 
@@ -118,6 +138,7 @@ def main(argv=None):
     cfg = acfg.load_base(a.config)
     cfg = acfg.apply_operating_point(
         cfg, ap_mm=a.ap, ae_mm=a.ae, rpm=a.rpm, feed_mm_s=a.feed,
+        n_teeth=a.teeth, fz_mm=a.fz, steps_per_tooth=a.steps_per_tooth,
         Ktc=a.ktc, Krc=a.krc, sim_dt=a.sim_dt, raster_mm=a.raster,
         robot_model=a.robot_model)
     acfg.check_compliant(cfg)
@@ -127,8 +148,10 @@ def main(argv=None):
     out_root = Path(a.out) if a.out else analysis.OUT
     d = save.run_dir(out_root, name)
 
-    # a new max feed needs a new constant-feed profile, not a rescaled one
-    toolpath.ensure(cfg, force=a.feed is not None, verbose=True)
+    # A new max feed needs a new constant-feed profile, not a rescaled one, and
+    # each feed gets its own file so a sweep cannot overwrite the path another
+    # run is replaying. `ensure` returns the config pointed at what it wrote.
+    cfg = toolpath.ensure(cfg, verbose=True)
 
     setup = stability.prepare(cfg, ds_mm=a.ds, verbose=a.verbose)
     say(setup.summary())
@@ -142,7 +165,14 @@ def main(argv=None):
                              verbose=a.verbose)
     ap_crit = stability.critical_depth(stab)
     row = {"run": name, "compensated": compensated,
+           **acfg.operating_point_row(cfg),
            **stability.prediction_row(stab, ap_crit)}
+    # The model's own truncation parameter at this operating point. Recorded, not
+    # judged: both cut terms drop the regenerative delay after one order, so this
+    # is the axis the tooth-passing sweep is really about.
+    wT = np.asarray(stab.omega_T(), float)
+    row["omega_T_max"] = float(np.nanmax(wT)) if np.isfinite(wT).any() else np.nan
+    row["tooth_trunc_frac"] = 0.5 * row["omega_T_max"] ** 2
     say(_prediction_block(row))
 
     # ── 5. the mean-force feedforward ────────────────────────────────────────
@@ -185,6 +215,11 @@ def main(argv=None):
     row["coupling"] = a.coupling
     row["ds_mm"] = float(a.ds)
     save.write_json(d / "summary.json", row)
+
+    if not a.no_plots:
+        from analysis import plots          # imported only when it is wanted
+        for k, v in plots.run_figures(d, stab, ff, run, setup, receptance).items():
+            written[k] = v
     say("")
     say(f"out      {d}")
     for k, v in written.items():
