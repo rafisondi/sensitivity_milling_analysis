@@ -57,10 +57,17 @@ TEETH_COLOUR = {1: C1, 2: C2, 4: C3, 8: C4}
 SIM, MODEL = C1, C2
 
 
-def _mpl():
-    """matplotlib with the Agg backend and this module's house style."""
+def _mpl(backend="Agg"):
+    """matplotlib with this module's house style, on `backend`.
+
+    Every figure in this module is written to disk, so it forces Agg by default
+    and never needs a display. Pass `backend=None` to apply the style and leave
+    whatever back end is configured alone - which is what a caller that intends
+    to SHOW a figure has to do, since forcing Agg makes `plt.show()` a no-op.
+    """
     import matplotlib
-    matplotlib.use("Agg")
+    if backend:
+        matplotlib.use(backend)
     import matplotlib.pyplot as plt
 
     plt.rcParams.update({
@@ -548,4 +555,148 @@ def sweep_figures(d, rows) -> dict:
         "fig_sweep_validity": figure_sweep_validity(
             fig_dir / "sweep_validity.png", rows),
         "fig_sweep_force": figure_sweep_force(fig_dir / "sweep_force.png", rows),
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The two sides on one axis
+# ─────────────────────────────────────────────────────────────────────────────
+
+#: Below this the envelope fit explains almost none of the band-passed motion,
+#: so the measured growth rate is a number rather than a measurement. Such cells
+#: are drawn hollow: shown, because hiding them would hide the reason the
+#: comparison is thin there, but never as evidence.
+R2_TRUSTED = 0.30
+
+#: Fewer engine steps than this through one tooth's engagement arc and the force
+#: is a staircase rather than a waveform. The arc is ~19% of a revolution at
+#: ae = 5 mm on a 16 mm cutter, so this counts `0.189 * steps_per_tooth * N`.
+STEPS_IN_CUT_TRUSTED = 8.0
+
+
+def steps_in_cut(row) -> float:
+    """Engine steps through ONE tooth's engagement arc.
+
+    The arc is fixed in ANGLE by `ae`, not by the tooth count, so holding the
+    steps per TOOTH fixed does not hold this fixed - it makes it scale with `N`.
+    That is why it has to be read off every cell rather than assumed.
+    """
+    try:
+        return 0.189 * float(row["steps_per_tooth"]) * float(row["n_teeth"])
+    except (KeyError, TypeError, ValueError):
+        return float("nan")
+
+
+def _overlay_panel(ax, sub, x_key, pred_key, sim_key, r2_key=None):
+    """One tooth count: the model against the engine, on the same axis."""
+    pts = []
+    for r in sub:
+        try:
+            x = float(r[x_key])
+            p = float(r[pred_key]) if r.get(pred_key) not in (None, "") else np.nan
+            s = float(r[sim_key]) if r.get(sim_key) not in (None, "") else np.nan
+        except (KeyError, TypeError, ValueError):
+            continue
+        r2 = np.nan
+        if r2_key and r.get(r2_key) not in (None, ""):
+            r2 = float(r[r2_key])
+        pts.append((x, p, s, r2, steps_in_cut(r)))
+    if not pts:
+        return
+    pts.sort()
+    x, p, s, r2, sic = (np.array([q[i] for q in pts]) for i in range(5))
+
+    ax.plot(x, p, color=MODEL, lw=1.6, ls=(0, (4, 2)), marker="s", ms=5,
+            mfc=SURFACE, mew=1.4, label="linear model", zorder=3)
+    ax.plot(x, s, color=SIM, lw=1.6, marker="o", ms=5, label="simulation",
+            zorder=4)
+
+    # Hollow out the cells the measurement cannot stand behind: a fit that
+    # explains nothing, or a cut the engine stepped through too coarsely.
+    weak = (~np.isfinite(r2) | (r2 < R2_TRUSTED)) if r2_key is not None \
+        else np.zeros(len(x), bool)
+    weak |= sic < STEPS_IN_CUT_TRUSTED
+    if weak.any():
+        ax.plot(x[weak], s[weak], color=SIM, lw=0, marker="o", ms=9,
+                mfc=SURFACE, mew=1.6, zorder=5)
+    ax.set_xscale("log")
+    _clean(ax)
+    return weak
+
+
+def figure_sweep_overlay(path, rows, *, pred_key, sim_key, ylabel, title,
+                         r2_key=None, x_key="spindle_rpm",
+                         x_label="spindle speed  [rpm]", zero_line=False,
+                         share_y=True):
+    """The prediction and the simulation on one axis, one panel per tooth count.
+
+    SMALL MULTIPLES RATHER THAN EIGHT LINES. Four tooth counts times two sources
+    is eight series; on one axis they are unreadable and the palette is past the
+    point where adjacent hues stay separable. Split by tooth count, each panel
+    carries two series that differ in colour AND linestyle AND marker, so the
+    comparison the figure exists to make is the only one being made in it.
+
+    A HOLLOW SIMULATION MARKER means that cell's measurement is not evidence:
+    either the envelope fit explains almost none of the motion (`R2` below
+    `R2_TRUSTED`), or the engine took fewer than `STEPS_IN_CUT_TRUSTED` steps
+    through one tooth's engagement, which makes its force a staircase. They are
+    plotted rather than dropped, because where the measurement gives out is
+    itself a result of this sweep.
+    """
+    plt = _mpl()
+    teeth = sorted({int(r["n_teeth"]) for r in rows})
+    # A shared y is right only when the panels are on the same scale. The mean
+    # force is not: `F0` scales with the tooth count, so N=1 and N=8 differ by
+    # 8x and a shared axis flattens the small panels into featureless lines.
+    fig, axes = plt.subplots(2, 2, figsize=(10, 6.6), sharex=True,
+                             sharey=bool(share_y))
+    flat = axes.ravel()
+
+    any_weak = False
+    for ax, n in zip(flat, teeth):
+        sub = [r for r in rows if int(r["n_teeth"]) == n]
+        weak = _overlay_panel(ax, sub, x_key, pred_key, sim_key, r2_key)
+        any_weak = any_weak or (weak is not None and bool(weak.any()))
+        if zero_line:
+            ax.axhline(0.0, color=MUTED, lw=0.8)
+        ax.set_title(f"{n} tooth" + ("" if n == 1 else "s"), loc="left",
+                     color=TEETH_COLOUR.get(n, INK), fontweight="medium")
+    for ax in flat[len(teeth):]:
+        ax.set_visible(False)
+    for ax in axes[-1]:
+        ax.set_xlabel(x_label)
+    for ax in (axes[:, 0] if share_y else flat[:len(teeth)]):
+        ax.set_ylabel(ylabel)
+
+    flat[0].legend(loc="best")
+    note = ("hollow = the measurement is not evidence there "
+            "(fit R2 < 0.3, or under 8 engine steps through the cut)")
+    fig.suptitle(title, x=0.005, ha="left", fontsize=11, color=INK,
+                 fontweight="medium")
+    if any_weak:
+        fig.text(0.005, -0.02, note, ha="left", fontsize=8, color=INK_2)
+    fig.tight_layout(rect=(0, 0, 1, 0.96))
+    return _save(fig, path)
+
+
+def overlay_figures(d, rows) -> dict:
+    """Model against simulation, for whichever cells have both."""
+    fig_dir = Path(d) / "figures"
+    rows = [r for r in rows if r.get("n_teeth") not in (None, "")
+            and str(r.get("sim_valid")).lower() == "true"]
+    if not rows:
+        return {}
+    return {
+        "fig_overlay_growth": figure_sweep_overlay(
+            fig_dir / "overlay_growth.png", rows,
+            pred_key="pred_growth_max_1_s", sim_key="sim_growth_1_s",
+            r2_key="sim_growth_r2", zero_line=True,
+            ylabel="growth rate  [1/s]",
+            title="growth rate: linear model against the coupled simulation"),
+        "fig_overlay_force": figure_sweep_overlay(
+            fig_dir / "overlay_force.png", rows,
+            pred_key="plateau_F_lin_N", sim_key="plateau_F_sim_N",
+            ylabel="plateau |F|  [N]", share_y=False,
+            title="mean cutting force: surrogate F0 against the engine, "
+                  "revolution-averaged"),
     }
