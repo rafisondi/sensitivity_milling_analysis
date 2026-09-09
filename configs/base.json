@@ -1,7 +1,7 @@
 {
   "name": "sensitivity_base",
   "sim": {
-    "sim_dt": 0.0002,
+    "sim_dt": 0.0001,
     "plan_dt": 0.001,
     "duration_s": 2.0
   },
@@ -53,9 +53,9 @@
     "spindle_rpm": 3333.0,
     "feed_mm_s": 40.0,
     "radial_engagement_mm": 5.0,
-    "sim_dt": 0.0002,
+    "sim_dt": 0.0001,
     "plan_dt": 0.001,
-    "raster_mm": 0.02,
+    "raster_mm": 0.01,
     "slice_angle_deg": 10.0,
     "warmup_revs": 5,
     "chip_mode": "dexel",

@@ -31,10 +31,24 @@ THE TWO DESIGNS, AND WHY BOTH
 `grid` - fixed CHIP LOAD over the whole rpm x teeth plane. The model does move
     here (`F0` scales with `N`), so it is a scaling test rather than a null test,
     but it covers the plane and every cell is physically the same cut per tooth.
-    Two things fall out of holding `fz` fixed: the pass duration goes as
-    `1/(rpm N)` and, at a fixed number of steps per tooth, so does `dt` - so
-    every cell costs the SAME number of steps. The grid is uniform in work and
-    in resolution, which is what makes cells comparable at all.
+
+RESOLUTION: A FIXED `dt`, NOT A FIXED NUMBER OF STEPS PER TOOTH
+
+The engagement arc is fixed in ANGLE by `ae` - 68 deg at ae = 5 mm on a 16 mm
+cutter, whatever the tooth count. So holding the steps per TOOTH fixed does not
+hold the cut equally resolved; it makes the steps through the cut scale with `N`
+(3.8 at one tooth, 30 at eight), which confounds numerical resolution with the
+very axis this sweep varies. At 20 steps per tooth that showed up as a 29-point
+swing in the one-tooth force error, purely from where the `dt` clamp landed.
+
+A fixed `dt` removes `N` from that: steps through the cut become a function of
+the spindle speed alone, 113 at 1000 rpm down to 11 at 10000 rpm. The price is
+that the cells no longer cost the same - the pass duration goes as `1/(rpm N)`,
+so `1000/z1` is 520k steps against 6k for `10000/z8` - and that one cell,
+`10000 rpm` with eight teeth, sits at 7.5 steps per TOOTH, just under the 8 where
+`MillConfig.summary` warns the tooth harmonics alias. Everything else clears it.
+
+`--steps-per-tooth` is still there to run the old rule deliberately.
 
 WHAT IS RECORDED AND WHAT IS NOT
 
@@ -79,9 +93,19 @@ GRID_FZ = 0.18
 ROW_RPM = (3333.0, 5000.0, 7500.0)
 ROW_FEED = 40.0
 
-#: Simulation steps per tooth period, held fixed across the sweep so the engine
-#: is equally resolved everywhere. `MillConfig.summary` warns below 8.
-STEPS_PER_TOOTH = 20.0
+#: Integration step [s], held fixed across the sweep. See the module docstring
+#: for why this rather than a fixed number of steps per tooth.
+SIM_DT = 1.0e-4
+
+#: Dexel raster [mm]. At the grid's `fz` this is 18 chip pixels in every cell,
+#: comfortably clear of the 2 px floor where the binary raster loses the chip.
+RASTER_MM = 0.01
+
+#: The feed profile every cell runs. "flying" holds `v_max` from the first sample,
+#: so the deviation carries the cut and nothing else - the smoothstep ramps of
+#: "ramped" are through air, but they deflect this arm by up to 168 um on their
+#: own, which swamps the cut on the fast cells. See `analysis.feedplan`.
+FEED_PROFILE = "flying"
 
 #: Cells whose chip falls below this many raster pixels are not SIMULATED - the
 #: binary raster loses the chip and the engine's force stops meaning anything.
@@ -169,10 +193,21 @@ def parse_args(argv=None):
                    help="axial depth [mm] (default: the config's 1.0)")
     p.add_argument("--ae", type=float, default=None, metavar="MM",
                    help="radial engagement [mm]")
-    p.add_argument("--raster", type=float, default=0.02, metavar="MM",
+    p.add_argument("--raster", type=float, default=RASTER_MM, metavar="MM",
                    help="dexel raster [mm]; also sets the chip-pixel guard")
-    p.add_argument("--steps-per-tooth", type=float, default=STEPS_PER_TOOTH,
-                   metavar="N", help="simulation steps per tooth period")
+    p.add_argument("--sim-dt", type=float, default=SIM_DT, metavar="S",
+                   help="integration step [s], the same in every cell")
+    p.add_argument("--steps-per-tooth", type=float, default=None, metavar="N",
+                   help="set the step from the TOOTH PERIOD instead of fixing it, "
+                        "dt = 60/(rpm N spt). Overrides --sim-dt; this makes the "
+                        "steps through the cut scale with the tooth count, so it "
+                        "is the wrong rule for a tooth-passing sweep - see the "
+                        "module docstring")
+    p.add_argument("--feed-profile", default=FEED_PROFILE,
+                   choices=("ramped", "flying"),
+                   help="'flying' (default) opens at full feed, so the deviation "
+                        "carries only the cut; 'ramped' adds the feed ramps and "
+                        "the arm's tracking error through them")
     p.add_argument("--ds", type=float, default=2.0, metavar="MM",
                    help="arc-length spacing of the stability nodes [mm]")
     p.add_argument("--no-cell-plots", action="store_true",
@@ -188,8 +223,12 @@ def argv_for(c, a, sweep_runs: Path, simulate: bool) -> list:
     """The `main.py` command line for one cell."""
     argv = ["--name", cell_name(c), "--out", str(sweep_runs),
             "--rpm", repr(float(c["rpm"])), "--teeth", str(int(c["teeth"])),
-            "--steps-per-tooth", repr(float(a.steps_per_tooth)),
-            "--raster", repr(float(a.raster)), "--ds", repr(float(a.ds))]
+            "--raster", repr(float(a.raster)), "--ds", repr(float(a.ds)),
+            "--feed-profile", str(a.feed_profile)]
+    if a.steps_per_tooth is not None:
+        argv += ["--steps-per-tooth", repr(float(a.steps_per_tooth))]
+    else:
+        argv += ["--sim-dt", repr(float(a.sim_dt))]
     if c["fz"] is not None:
         argv += ["--fz", repr(float(c["fz"]))]
     else:
@@ -217,8 +256,10 @@ def main(argv=None):
     plan = cells(a.design)
 
     print(f"sweep    {a.name}: {len(plan)} cells, design {a.design!r}")
-    print(f"         teeth {TEETH}, {a.steps_per_tooth:g} steps/tooth, "
-          f"raster {a.raster:g} mm")
+    step_txt = (f"{a.steps_per_tooth:g} steps/tooth"
+                if a.steps_per_tooth is not None else f"dt {a.sim_dt:g} s")
+    print(f"         teeth {TEETH}, {step_txt}, raster {a.raster:g} mm, "
+          f"{a.feed_profile} feed")
     if a.simulate:
         n = len(want_sim) if want_sim else len(plan)
         print(f"         SIMULATING {'the ' + str(n) + ' named cell(s)' if want_sim else 'every cell'}")
@@ -285,7 +326,11 @@ def main(argv=None):
                      "teeth": list(TEETH), "grid_rpm": list(GRID_RPM),
                      "grid_fz_mm": GRID_FZ, "row_rpm": list(ROW_RPM),
                      "row_feed_mm_s": ROW_FEED,
-                     "steps_per_tooth": float(a.steps_per_tooth),
+                     "sim_dt": (None if a.steps_per_tooth is not None
+                                else float(a.sim_dt)),
+                     "steps_per_tooth": (None if a.steps_per_tooth is None
+                                         else float(a.steps_per_tooth)),
+                     "feed_profile": str(a.feed_profile),
                      "raster_mm": float(a.raster), "simulated": bool(a.simulate),
                      "skipped_simulation": skipped})
 
@@ -296,6 +341,9 @@ def main(argv=None):
             sub = [r for r in rows if r.get("design") == design
                    and r.get("n_teeth") is not None]
             for k, v in plots.sweep_figures(sweep_dir / design, sub).items():
+                written[f"{design}/{k}"] = v
+            # The two sides on one axis, for whatever has actually been run.
+            for k, v in plots.overlay_figures(sweep_dir / design, sub).items():
                 written[f"{design}/{k}"] = v
 
     print()
