@@ -154,7 +154,12 @@ class Simulator:
 
     `reset` presets the springs on their load equilibrium, so the run starts
     tracking instead of ringing toward it. `step` advances one `sim_dt` and
-    records the state. `result` packages what was recorded.
+    records the state AS IT WAS at the start of that step. `result` packages what
+    was recorded.
+
+    The recording convention is that sample `k` of every array — time, command,
+    wrench, joint angles, TCP pose — belongs to the same instant `t[k]`. `step`
+    explains why the alternative silently biases every deviation measurement.
     """
 
     def __init__(self, robot: Robot, scene, sim_dt: float, record: bool = True):
@@ -254,20 +259,38 @@ class Simulator:
 
         f_ext  (6, 1) external TCP wrench, base frame — see `wrench_from_force_w`
         tau_ff (n,)   feedforward motor torque — see `tau_ff`
+
+        WHAT GETS RECORDED IS THE STATE AT `self.time`, NOT AFTER THE STEP.
+
+        Sample `k` of every recorded array belongs to `t[k]`: the command applied
+        over `[t_k, t_k + dt]`, the wrench applied over it, and the pose the arm
+        was IN at `t_k`. The returned pair is still the post-step state, because
+        a caller driving the loop wants the state it just produced.
+
+        Recording the post-step pose against the pre-step stamp - which is what
+        this did - pairs the pose at `t_k + dt` with the command at `t_k`, so
+        every deviation carries a spurious `feed * dt` along the feed direction.
+        That is a fixed offset, not noise, and it is invisible in a sweep that
+        holds the chip load and the steps per tooth fixed, because `feed * dt` is
+        then exactly `fz / steps_per_tooth` in every cell.
+
+        The cost is the final post-step state: `n` steps still record `n` samples,
+        now spanning `t[0] .. t[n-1]` rather than `t[1] .. t[n]`.
         """
         theta = np.asarray(theta, dtype=float).reshape(-1)
         thetaD = np.zeros_like(theta) if thetaD is None else np.asarray(
             thetaD, dtype=float).reshape(-1)
         f_ext = np.zeros((6, 1)) if f_ext is None else f_ext
 
-        _, q_full, _, fk = self.solver.step(theta, thetaD, f_ext, tau_ff=tau_ff)
-
         if self.record:
+            q_now, fk_now = self.solver.current_state(theta)
             self._t.append(self.time)
             self._theta.append(theta.copy())
-            self._q.append(q_full)
-            self._fk.append(fk)
+            self._q.append(q_now)
+            self._fk.append(fk_now)
             self._f.append(np.asarray(f_ext, dtype=float).ravel().copy())
+
+        _, q_full, _, fk = self.solver.step(theta, thetaD, f_ext, tau_ff=tau_ff)
         self.time += self.dt
         return q_full, fk
 
@@ -279,7 +302,13 @@ class Simulator:
 
     def result(self, path: OperationalPath,
                nominal_force_w=None) -> SimResult:
-        """Package the recorded history. `path` is what the command was aiming at."""
+        """Package the recorded history. `path` is what the command was aiming at.
+
+        Sample `k` of every array is at `t[k]` — see `step` for why that alignment
+        is load-bearing rather than a detail: `SimResult.deflection_i_um` compares
+        `tcp_i` against `path.resample_i(t)`, so a one-sample skew between them
+        shows up as a constant deviation along the feed.
+        """
         if not self._t:
             raise RuntimeError("nothing recorded — step the simulator first")
         return SimResult(

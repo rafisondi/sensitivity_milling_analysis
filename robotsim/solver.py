@@ -108,6 +108,16 @@ class Solver:
         rot = R.from_matrix(T[:3, :3])
         return np.hstack([T[:3, -1], rot.as_euler('xyz', degrees=False)])
 
+    def current_state(self, theta: np.ndarray):
+        """(q_full (n,), fk (6,)) as the arm stands NOW, before any further step.
+
+        `step` returns the state AFTER integrating one dt. Anything recording a
+        history against a time stamp needs the state AT that stamp instead, which
+        is this one - see `robotsim.dynamics.Simulator.step`.
+        """
+        q_full = self.get_current_q_full(theta).reshape(-1)
+        return q_full, self._calc_fkine_vec(q_full, self.reference_system)
+
     def step(self, theta: np.ndarray, thetaD: np.ndarray, f_ext: np.ndarray,
              tau_ff: np.ndarray = None):
         """Advance one step. tau_ff is an optional feedforward motor torque
