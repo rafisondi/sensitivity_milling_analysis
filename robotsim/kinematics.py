@@ -134,6 +134,30 @@ class JointTrajectory:
     def max_joint_vel(self) -> float:
         return float(np.abs(self.thetaD).max())
 
+    def thetaDD_at(self, i: int = 0, skip: int = 3) -> np.ndarray:
+        """(n,) commanded joint acceleration at sample `i`, edge artefact removed.
+
+        `thetaDD` is a double finite difference of an IK solution whose FIRST
+        point was seeded by the caller rather than warm-started from its
+        neighbour. The resulting ~eps offset in `theta[0]` is invisible in
+        position and negligible in velocity, but differentiating twice turns it
+        into a spike of hundreds of times the real acceleration, confined to the
+        first sample or two.
+
+        Anything that presets an initial equilibrium reads this instead of
+        `thetaDD[0]`: `Simulator.reset` puts the joint springs on `M thetaDD`, so
+        a spurious first sample opens the run carrying a load that is not there
+        and the arm rings down from it. On a constant-velocity path that showed
+        up as 7 um of TCP deflection at t = 0 decaying over half a second - the
+        exact startup transient a flying start exists to remove.
+
+        The acceleration is smooth over a few samples on any planned path, so
+        reading it `skip` samples in is a better estimate of the value AT `i`
+        than the contaminated sample itself.
+        """
+        j = min(max(int(i) + int(skip), 0), len(self.thetaDD) - 1)
+        return np.asarray(self.thetaDD[j], dtype=float)
+
     def resample(self, sim_dt: float):
         """(t_sim, theta_cmd, thetaD_cmd) on the finer simulation grid.
 
@@ -212,6 +236,13 @@ def solve_ik(robot: Robot, path: OperationalPath, seed_rad,
     theta = solve_ik_points(robot, path.s_i, path.R_i_tcp, seed_rad,
                             ee_frame=ee_frame, eps=eps)
     thetaD = np.gradient(theta, path.dt, axis=0, edge_order=2)
+    # THE FIRST FEW SAMPLES OF `thetaDD` ARE NOT TRUSTWORTHY. `solve_ik_points`
+    # warm-starts each point from its predecessor but seeds point 0 from the
+    # caller's guess, so `theta[0]` lands ~eps off the chain the rest of the path
+    # forms. That is invisible in position and negligible in velocity, but
+    # differentiating twice turns it into an acceleration spike hundreds of times
+    # the real value - see `JointTrajectory.thetaDD_at`, which is what anything
+    # presetting an initial equilibrium should read instead of `thetaDD[0]`.
     thetaDD = np.gradient(thetaD, path.dt, axis=0)
     traj = JointTrajectory(theta=theta, thetaD=thetaD, thetaDD=thetaDD,
                            t=path.t.copy(), dt=path.dt)

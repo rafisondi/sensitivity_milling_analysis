@@ -76,7 +76,10 @@ def simulate(cfg, feedforward=None, *, path=None, preload_i=None,
     # open ON the tracking equilibrium of whatever load t = 0 carries, so the run
     # does not start by springing to it
     f_cut0_w = (f0[0] if (steady_state and f0 is not None) else None)
-    sim.reset(theta_cmd[0], thetaD_cmd[0], joints.thetaDD[0],
+    # `thetaDD_at(0)` rather than `thetaDD[0]` - the first sample of the double
+    # finite difference carries an IK-seeding artefact that would preset the
+    # springs for a load that is not there. See `JointTrajectory.thetaDD_at`.
+    sim.reset(theta_cmd[0], thetaD_cmd[0], joints.thetaDD_at(0),
               f_ext=sim.wrench_from_force_w(f_cut0_w, preload_i),
               tau_ff=tau_at(0))
 
