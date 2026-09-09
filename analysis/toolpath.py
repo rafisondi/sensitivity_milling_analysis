@@ -22,7 +22,7 @@ from analysis import config as acfg
 from analysis import feedplan
 
 
-def build(cfg, v_max_mm_s=None, name=None):
+def build(cfg, v_max_mm_s=None, name=None, profile="ramped"):
     """(waypoints, t, xy, v, path_file) for the one-edge constant-feed job."""
     mill = cfg.milling()
     part = cfg.part.build()
@@ -32,7 +32,8 @@ def build(cfg, v_max_mm_s=None, name=None):
         mill.tool_offset_mm, start_edge=cfg.path.start_edge, n_edges=1,
         lead_in_mm=cfg.path.lead_in_mm, lead_out_mm=cfg.path.lead_out_mm)
 
-    t, xy, v = feedplan.constant_feed_path(waypoints, v_max, dt=cfg.sim.plan_dt)
+    t, xy, v = feedplan.constant_feed_path(waypoints, v_max, dt=cfg.sim.plan_dt,
+                                           profile=profile)
 
     name = name or cfg.path.toolpath or acfg.BASE_TOOLPATH
     out = acfg.TOOLPATH_DIR / f"{name}.npz"
@@ -42,7 +43,7 @@ def build(cfg, v_max_mm_s=None, name=None):
     return waypoints, t, xy, v, out
 
 
-def name_for(cfg) -> str:
+def name_for(cfg, profile="ramped") -> str:
     """The toolpath filename for this config's feed: one file per max feed.
 
     The profile holds `v_max` across the whole engaged span, so it belongs to
@@ -60,11 +61,13 @@ def name_for(cfg) -> str:
     `..._v39.996.npz` and then looked for at `..._v39.npz`. The separator is `p`
     for that reason, matching the run-directory convention.
     """
-    base = re.sub(r"_v[0-9p]+$", "", cfg.path.toolpath or acfg.BASE_TOOLPATH)
-    return f"{base}_v{float(cfg.path.speed_mm_s):g}".replace(".", "p")
+    base = re.sub(r"(_flying)?_v[0-9p]+$", "",
+                  cfg.path.toolpath or acfg.BASE_TOOLPATH)
+    tag = "_flying" if profile == "flying" else ""
+    return f"{base}{tag}_v{float(cfg.path.speed_mm_s):g}".replace(".", "p")
 
 
-def ensure(cfg, *, force=False, verbose=True):
+def ensure(cfg, *, force=False, profile="ramped", verbose=True):
     """Build the toolpath for this config's feed, and point the config at it.
 
     The saved file records the speed profile it was planned with, so "matches"
@@ -75,7 +78,7 @@ def ensure(cfg, *, force=False, verbose=True):
     disk - so the caller replays the profile that was just checked rather than
     whatever name it happened to start with.
     """
-    name = name_for(cfg)
+    name = name_for(cfg, profile)
     out = acfg.TOOLPATH_DIR / f"{name}.npz"
     want = float(cfg.path.speed_mm_s)
     cfg = replace(cfg, path=replace(cfg.path, toolpath=name))
@@ -88,7 +91,7 @@ def ensure(cfg, *, force=False, verbose=True):
                 print(f"toolpath {out.name} (max feed {have:g} mm/s, reused)")
             return cfg
 
-    waypoints, t, xy, v, out = build(cfg, want, name)
+    waypoints, t, xy, v, out = build(cfg, want, name, profile)
     if verbose:
         print(describe(cfg, waypoints, t, xy, v))
         print(f"toolpath {out}")

@@ -63,6 +63,13 @@ def parse_args(argv=None):
                    help="max feed [mm/s]; regenerates the toolpath")
     g.add_argument("--teeth", type=int, default=None, metavar="N",
                    help="flutes on the cutter")
+    g.add_argument("--feed-profile", default="flying",
+                   choices=("ramped", "flying"),
+                   help="'flying' (default) opens at full feed and stays there, "
+                        "so the deviation carries only the cut; 'ramped' puts "
+                        "smoothstep feed ramps in the lead-in and lead-out, "
+                        "which is what a real machine does but adds the arm's "
+                        "commanded-acceleration tracking error on top")
     g.add_argument("--fz", type=float, default=None, metavar="MM",
                    help="chip load [mm/tooth]; sets the feed from the rpm and "
                         "the tooth count instead of the other way round. "
@@ -151,7 +158,7 @@ def main(argv=None):
     # A new max feed needs a new constant-feed profile, not a rescaled one, and
     # each feed gets its own file so a sweep cannot overwrite the path another
     # run is replaying. `ensure` returns the config pointed at what it wrote.
-    cfg = toolpath.ensure(cfg, verbose=True)
+    cfg = toolpath.ensure(cfg, profile=a.feed_profile, verbose=True)
 
     setup = stability.prepare(cfg, ds_mm=a.ds, verbose=a.verbose)
     say(setup.summary())
@@ -211,6 +218,7 @@ def main(argv=None):
     if run is not None:
         written.update(save.save_run(d, run, decimate=a.csv_decimate))
 
+    row["feed_profile"] = a.feed_profile
     row["csv_decimate"] = int(a.csv_decimate)
     row["coupling"] = a.coupling
     row["ds_mm"] = float(a.ds)

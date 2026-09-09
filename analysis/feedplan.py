@@ -26,11 +26,37 @@ That polynomial integrates to exactly 1/2 over [0, 1], so a ramp of duration
 
 covers exactly L_ramp — no search, no numerical integration, and the plateau
 starts precisely at the material.
+
+THE FLYING PROFILE, AND WHY IT EXISTS
+
+`profile="flying"` drops the ramps entirely: the tool is at `v_max` at t = 0 and
+stays there to the end of the lead-out. It cannot be run on a real machine, and
+that is not what it is for.
+
+The ramps are through air, so they change nothing about the cut - but they are
+not free in a COMPARISON. Accelerating this arm takes joint torque, joint torque
+deflects the springs, and the tool therefore sits tens of micrometres off the
+command all through the lead-in and again all through the lead-out, with no
+cutting force anywhere near it. At a fixed chip load the feed rises with the
+spindle speed, so that excursion grows with rpm: 5 um at 24 mm/s, 26 um at
+120 mm/s. Any linear model driven by the cutting force alone - `compare_linear`,
+`stabsim.stability` - has no term for it and cannot reproduce it, so the ramps
+show up as model error that is really commanded-acceleration tracking error.
+
+A flying start removes them at the source. `Simulator.reset` is handed
+`thetaD_cmd[0]` and solves the tracking equilibrium at that velocity, so the run
+opens already moving and already deflected correctly - there is no step and no
+startup transient to decay. What is left in the deviation is the cut.
 """
 
 import numpy as np
 
 _MIN_RAMP_MM = 1e-6
+
+#: How the feed gets to `v_max`. "ramped" puts smoothstep ramps in the lead-in
+#: and lead-out; "flying" is at `v_max` from the first sample - see the module
+#: docstring for when each is the right one.
+PROFILES = ("ramped", "flying")
 
 
 def smoothstep(tau):
@@ -89,13 +115,36 @@ def trapezoid_profile(lead_in_mm, edge_mm, lead_out_mm, v_max_mm_s, dt=1.0e-3):
     return t, s, v
 
 
-def constant_feed_path(waypoints_mm, v_max_mm_s, dt=1.0e-3):
+def flying_profile(lead_in_mm, edge_mm, lead_out_mm, v_max_mm_s, dt=1.0e-3):
+    """(t, s_mm, v_mm_s) at a constant `v_max` over the whole polyline.
+
+    No ramps anywhere: `s = v t` from the first sample to the last. The arm is
+    expected to be handed this as an already-moving initial condition, which is
+    what `Simulator.reset(theta, thetaD, ...)` sets up.
+    """
+    if v_max_mm_s <= 0.0:
+        raise ValueError(f"v_max must be positive, got {v_max_mm_s} mm/s")
+    if edge_mm <= 0.0:
+        raise ValueError(f"the cut needs positive length, got {edge_mm} mm")
+
+    total_mm = lead_in_mm + edge_mm + lead_out_mm
+    t = np.arange(0.0, total_mm / v_max_mm_s + 0.5 * dt, dt)
+    s = np.minimum(v_max_mm_s * t, total_mm)
+    return t, s, np.full_like(t, float(v_max_mm_s))
+
+
+def constant_feed_path(waypoints_mm, v_max_mm_s, dt=1.0e-3, profile="ramped"):
     """(t, xy_mm, v_mm_s) along a 4-waypoint lead-in / edge / lead-out polyline.
 
     `waypoints_mm` is what `Workpiece.contour_waypoints(..., n_edges=1,
     lead_in_mm=..., lead_out_mm=...)` returns: [lead-in start, entry, exit,
     lead-out end].
+
+    `profile` is "ramped" (smoothstep ramps through the air at each end) or
+    "flying" (at `v_max` from the first sample) - see the module docstring.
     """
+    if profile not in PROFILES:
+        raise ValueError(f"profile must be one of {PROFILES}, got {profile!r}")
     w = np.asarray(waypoints_mm, float)
     if w.shape != (4, 2):
         raise ValueError(
@@ -105,7 +154,8 @@ def constant_feed_path(waypoints_mm, v_max_mm_s, dt=1.0e-3):
 
     seg = np.linalg.norm(np.diff(w, axis=0), axis=1)
     lead_in, edge, lead_out = seg
-    t, s, v = trapezoid_profile(lead_in, edge, lead_out, v_max_mm_s, dt=dt)
+    make = trapezoid_profile if profile == "ramped" else flying_profile
+    t, s, v = make(lead_in, edge, lead_out, v_max_mm_s, dt=dt)
 
     knots = np.concatenate([[0.0], np.cumsum(seg)])
     xy = np.column_stack([np.interp(s, knots, w[:, k]) for k in (0, 1)])
