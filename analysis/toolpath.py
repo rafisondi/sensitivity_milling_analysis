@@ -51,10 +51,14 @@ def name_for(cfg, profile="ramped") -> str:
     new feed rebuilds and overwrites the same shared file, and two runs sharing
     a workspace can each replay a path the other planned.
 
-    The name is built from the PART GEOMETRY and the feed rather than by editing
-    whatever name the config arrived with, so lengthening the stock cannot end up
-    replaying the short part's path. For the stock 100 x 60 part it produces
-    exactly the names the earlier runs used.
+    The name is built from the PART GEOMETRY, the TOOL OFFSET and the feed rather
+    than by editing whatever name the config arrived with. The offset is in it
+    because the waypoints are `contour_waypoints(tool_offset_mm, ...)` with
+    `tool_offset_mm = R - ae`: without it, every `ae` at one feed mapped to one
+    file and replayed the path planned for whichever `ae` ran first - which is
+    why `sweep_ae.py` had to delete the cache before each cell. A negative offset
+    (ae > R, the tool centre inside the part) is spelled `m`, e.g. `offm4p8`.
+    Runs made before this keep their own recorded names in `config.json`.
 
     THE STAMP CARRIES NO DECIMAL POINT. `IO.toolpath_file` resolves a name with
     `with_suffix('.npz')`, which reads everything after the last dot as an
@@ -63,8 +67,10 @@ def name_for(cfg, profile="ramped") -> str:
     for that reason, matching the run-directory convention.
     """
     tag = "_flying" if profile == "flying" else ""
-    return (f"edge_{cfg.part.length_mm:g}x{cfg.part.width_mm:g}_constant_feed"
-            f"{tag}_v{float(cfg.path.speed_mm_s):g}").replace(".", "p")
+    off = cfg.milling().tool_offset_mm
+    return (f"edge_{cfg.part.length_mm:g}x{cfg.part.width_mm:g}_off{off:g}"
+            f"_constant_feed{tag}_v{float(cfg.path.speed_mm_s):g}"
+            ).replace(".", "p").replace("-", "m")
 
 
 def ensure(cfg, *, force=False, profile="ramped", verbose=True):
