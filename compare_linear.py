@@ -60,6 +60,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import analysis                                                # noqa: E402
 from analysis import plots, stability                          # noqa: E402
 from analysis import plant as plant_mod                        # noqa: E402
+from robotsim.kinematics import load_robot                     # noqa: E402
 from runconfig import RunConfig                                # noqa: E402
 
 DRIVES = ("as-run", "uncompensated")
@@ -133,7 +134,54 @@ def _repin(cfg):
         toolpath_dir=str(acfg.TOOLPATH_DIR)))
 
 
-def schedule(d: Path, *, ds_mm=2.0, drive="as-run", verbose=False):
+def _pose_scheduled_plant(d: Path, setup, node_s, s_t, verbose=False):
+    """A(s), B(s) at each stability node, from re-linearising the arm at the
+    COMMANDED joint angles the run actually held there.
+
+    `robotsim.dynamics.SimResult.save_npz` already wrote `theta_cmd` into
+    `raw/coupled.npz` - the same commanded motor angles `sim_coupled` drove the
+    plant with - so the pose along the path is read back, not re-solved by IK.
+    Read `theta_cmd` rather than `q_hist` (the actual, DEFLECTED angles):
+    `analysis.plant`'s frozen model is linearised at a commanded pose too
+    (`cfg.start`), so this stays the same kind of model, just no longer frozen
+    at one point on it - the deflection the pose is linearised at is not
+    supposed to be an input the prediction gets to see.
+
+    Only `A` and `B` vary with pose. `Receptance.from_mdk` builds `C = [I, 0]`
+    and `D = 0` for every M/D/K, so the output map is pose-INDEPENDENT and does
+    not need to be rebuilt here.
+    """
+    with np.load(d / "raw" / "coupled.npz") as z:
+        theta_cmd = np.asarray(z["theta_cmd"], float)
+        t_theta = np.asarray(z["t"], float)
+
+    robot = load_robot(setup.scene)
+    A_nodes, B_nodes = [], []
+    for th in _theta_at_s(node_s, s_t, t_theta, theta_cmd):
+        model = plant_mod.tcp_linear_model(
+            robot, th, gravity_on=bool(setup.scene.gravity_on),
+            ee_frame=setup.scene.ee_frame, frame="base")
+        rec = plant_mod.Receptance.from_mdk(model).in_workpiece(setup.scene)
+        A_nodes.append(rec.A)
+        B_nodes.append(rec.B)
+    if verbose:
+        print(f"         pose-scheduled plant: {len(node_s)} re-linearisations "
+              f"along the path")
+    return np.asarray(A_nodes), np.asarray(B_nodes)
+
+
+def _theta_at_s(node_s, s_t, t_theta, theta_cmd):
+    """`theta_cmd`, sampled at the time each stability node's arc length falls
+    at. `s_t` is arc length on `theta_cmd`'s own time grid (`t_theta`), so this
+    is a plain composition of two interpolations, s -> t -> theta."""
+    t_node = np.interp(node_s, s_t, t_theta)
+    return np.column_stack(
+        [np.interp(t_node, t_theta, theta_cmd[:, j])
+         for j in range(theta_cmd.shape[1])])
+
+
+def schedule(d: Path, *, ds_mm=2.0, drive="as-run", pose_schedule=False,
+            verbose=False):
     """Rebuild this run's linear model and put every term on its time grid.
 
     Returns a dict with the simulation's own histories and the scheduled cut
@@ -143,6 +191,13 @@ def schedule(d: Path, *, ds_mm=2.0, drive="as-run", verbose=False):
     `StabilityAlongPath.save_npz` keeps the verdict and the geometry but not
     `K_p`/`C_p` - and recomputing them from the saved config is exact, since the
     prediction is a pure function of it.
+
+    `pose_schedule=True` additionally re-linearises the ARM (not just the cut)
+    at each stability node along the path - see `_pose_scheduled_plant` for
+    what is and is not re-derived. `A_t`/`B_t` carry whichever plant `integrate`
+    should use by default; `A_t_frozen`/`B_t_frozen` are always the single
+    start-pose plant, repeated, so the two can be integrated and compared
+    side by side regardless of which one is the default here.
     """
     cfg = _repin(RunConfig.load(str(d / "config.json")))
     with np.load(d / "raw" / "coupled.npz") as z:
@@ -196,14 +251,24 @@ def schedule(d: Path, *, ds_mm=2.0, drive="as-run", verbose=False):
     qs_dev_um = (drive_t @ G0.T) * 1e6
     qs_F0 = F0_t
 
+    A_frozen = np.broadcast_to(recep.A, (len(t),) + recep.A.shape).copy()
+    B_frozen = np.broadcast_to(recep.B, (len(t),) + recep.B.shape).copy()
+    A_t, B_t = A_frozen, B_frozen
+    if pose_schedule:
+        A_nodes, B_nodes = _pose_scheduled_plant(d, setup, node_s, s_t,
+                                                 verbose=verbose)
+        A_t, B_t = on_t(A_nodes), on_t(B_nodes)
+
     return {"G0": G0, "qs_dev_um": qs_dev_um, "qs_F0": qs_F0,
             "cfg": cfg, "setup": setup, "receptance": recep, "stab": stab,
             "t": t, "s_mm": s_t, "force_w": force_w, "dev_um": dev_um,
             "K_t": K_t, "C_t": C_t, "F0_t": F0_t, "drive_t": drive_t,
+            "A_t": A_t, "B_t": B_t, "A_t_frozen": A_frozen, "B_t_frozen": B_frozen,
+            "pose_schedule": bool(pose_schedule),
             "mill": setup.mill, "run_dir": d, "drive": drive}
 
 
-def integrate(sch) -> dict:
+def integrate(sch, *, A_t=None, B_t=None) -> dict:
     """RK4 the scheduled linear model along the pass.
 
     THE DEFLECTION IS `C z`, NOT THE FIRST THREE STATES. `Receptance.rotated`
@@ -221,38 +286,51 @@ def integrate(sch) -> dict:
 
     `C B` is zero for anything built from M/D/K, which is what makes `dxd` a
     function of the state alone and keeps this an ODE rather than an algebraic
-    loop - the same condition `closed_loop_matrix` checks before inverting.
+    loop - the same condition `closed_loop_matrix` checks before inverting. `C`
+    is `[I, 0]` for EVERY pose `Receptance.from_mdk` can produce (it never
+    depends on `M`/`D`/`K`), so this holds whether or not `A`/`B` are pose-
+    scheduled - only `A z` survives in `dxd`, not `A z + B f`.
 
-    The cut matrices are held over each step and averaged for the half-step,
-    which is exact enough: they change on the `ds_mm` node spacing, thousands of
-    simulation steps apart, while the state changes on the arm's ~23 Hz modes.
+    THE PLANT, LIKE THE CUT, IS HELD OVER EACH STEP AND AVERAGED FOR THE HALF-
+    STEP. `A_t`/`B_t` default to `sch`'s own (the frozen start-pose plant,
+    repeated, unless `sch` was built with `pose_schedule=True`), but can be
+    passed explicitly so the same `sch` integrates against EITHER plant -
+    see `compare_linear.main`'s `--pose-schedule` path, which does both and
+    overlays them. Pose-scheduled or not, this is exact enough for the same
+    reason the cut matrices are: both change on the `ds_mm` node spacing,
+    thousands of simulation steps apart, while the state changes on the arm's
+    ~23 Hz modes.
     """
     r = sch["receptance"]
-    A, B, Cm = r.A, r.B, r.C
-    if np.abs(Cm @ B).max() > 1e-12 or np.abs(r.D).max() > 1e-12:
+    Cm = r.C
+    A_t = sch["A_t"] if A_t is None else np.asarray(A_t, float)
+    B_t = sch["B_t"] if B_t is None else np.asarray(B_t, float)
+    CB = np.einsum("ij,kjl->kil", Cm, B_t)
+    if np.abs(CB).max() > 1e-9 or np.abs(r.D).max() > 1e-12:
         raise NotImplementedError(
             "this plant is biproper (C B or D nonzero), so the damping term "
             "closes through an algebraic loop and needs a dF/dt state")
-    CA = Cm @ A
     t, K_t, C_t, drive_t = sch["t"], sch["K_t"], sch["C_t"], sch["drive_t"]
-    n, n_state = len(t), A.shape[0]
+    n, n_state = len(t), A_t.shape[1]
 
-    def rhs(z, K, Cc, u):
-        f = u + K @ (Cm @ z) + Cc @ (CA @ z)
+    def rhs(z, A, B, K, Cc, u):
+        f = u + K @ (Cm @ z) + Cc @ (Cm @ (A @ z))
         return A @ z + B @ f
 
     z = np.zeros(n_state)
     out = np.zeros((n, n_state))
     for k in range(n - 1):
         dt = t[k + 1] - t[k]
-        Ka, Ca, ua = K_t[k], C_t[k], drive_t[k]
-        Kb, Cb, ub = K_t[k + 1], C_t[k + 1], drive_t[k + 1]
-        Kh, Ch, uh = 0.5 * (Ka + Kb), 0.5 * (Ca + Cb), 0.5 * (ua + ub)
+        Aa, Ba, Ka, Ca, ua = A_t[k], B_t[k], K_t[k], C_t[k], drive_t[k]
+        Ab, Bb, Kb, Cb, ub = (A_t[k + 1], B_t[k + 1], K_t[k + 1], C_t[k + 1],
+                              drive_t[k + 1])
+        Ah, Bh, Kh, Ch, uh = (0.5 * (Aa + Ab), 0.5 * (Ba + Bb), 0.5 * (Ka + Kb),
+                              0.5 * (Ca + Cb), 0.5 * (ua + ub))
 
-        k1 = rhs(z, Ka, Ca, ua)
-        k2 = rhs(z + 0.5 * dt * k1, Kh, Ch, uh)
-        k3 = rhs(z + 0.5 * dt * k2, Kh, Ch, uh)
-        k4 = rhs(z + dt * k3, Kb, Cb, ub)
+        k1 = rhs(z, Aa, Ba, Ka, Ca, ua)
+        k2 = rhs(z + 0.5 * dt * k1, Ah, Bh, Kh, Ch, uh)
+        k3 = rhs(z + 0.5 * dt * k2, Ah, Bh, Kh, Ch, uh)
+        k4 = rhs(z + dt * k3, Ab, Bb, Kb, Cb, ub)
         z = z + (dt / 6.0) * (k1 + 2 * k2 + 2 * k3 + k4)
         out[k + 1] = z
         if not np.all(np.isfinite(z)):
@@ -261,8 +339,9 @@ def integrate(sch) -> dict:
             out[k + 1:] = np.nan
             break
 
-    dx = out @ Cm.T                       # (n, 3) deflection [m]
-    dxd = out @ CA.T                      # (n, 3) deflection rate [m/s]
+    dx = out @ Cm.T                                          # (n, 3) [m]
+    CA_t = np.einsum("ij,kjl->kil", Cm, A_t)                  # (n, 3, n_state)
+    dxd = np.einsum("kij,kj->ki", CA_t, out)                  # (n, 3) [m/s]
     f_lin = (sch["F0_t"]
              + np.einsum("kij,kj->ki", sch["K_t"], dx)
              + np.einsum("kij,kj->ki", sch["C_t"], dxd))
@@ -283,7 +362,7 @@ def revolution_average(t, F, mill):
 # Reporting
 # ─────────────────────────────────────────────────────────────────────────────
 
-def summary(sch, lin) -> str:
+def summary(sch, lin, *, lin_other=None, lin_other_label=None) -> str:
     m = sch["mill"]
     sim, mod, qs = sch["dev_um"], lin["dx_um"], sch["qs_dev_um"]
     ok = np.isfinite(mod).all(axis=1)
@@ -297,6 +376,7 @@ def summary(sch, lin) -> str:
         f"         drive {sch['drive']!r}: |drive| max "
         f"{np.linalg.norm(sch['drive_t'], axis=1).max():.1f} N of |F0| max "
         f"{np.linalg.norm(sch['F0_t'], axis=1).max():.1f} N",
+        f"         plant {'pose-scheduled, ' + str(len(sch['stab'].s_mm)) + ' poses along the path' if sch['pose_schedule'] else 'frozen at the start pose'}",
         "",
     ]
 
@@ -331,10 +411,28 @@ def summary(sch, lin) -> str:
     for j, a in enumerate(axes):
         e, l = F_r[:, j].mean(), F_l[:, j].mean()
         lines.append(f"         {a:<6} {e:9.2f} {l:9.2f} {l - e:9.2f}")
+
+    if lin_other is not None:
+        cut = np.linalg.norm(sch["force_w"], axis=1) > 50.0
+        mask = ok & np.isfinite(lin_other["dx_um"]).all(axis=1) & cut
+        other = lin_other["dx_um"]
+        lines += ["", f"pose-scheduled vs. frozen plant, ENGAGED span "
+                       f"[{lin_other_label or 'other'} - this run's default]",
+                  f"         {'axis':<6} {'rms this':>10} {'rms other':>10} "
+                  f"{'rms(diff)':>10} {'corr':>7}"]
+        for j, a in enumerate(axes):
+            l, o = mod[mask, j], other[mask, j]
+            c = (float(np.corrcoef(l, o)[0, 1])
+                 if l.std() > 1e-12 and o.std() > 1e-12 else np.nan)
+            lines.append(
+                f"         {a:<6} {np.sqrt((l**2).mean()):10.2f} "
+                f"{np.sqrt((o**2).mean()):10.2f} "
+                f"{np.sqrt(((l - o)**2).mean()):10.2f} {c:7.3f}")
     return "\n".join(lines)
 
 
-def figure(sch, lin, save_dir=None, expected=False):
+def figure(sch, lin, save_dir=None, expected=False, *, lin_other=None,
+          lin_other_label=None):
     """Forces and deviation, x/y/z, engine against the integrated linear model.
 
     `expected` adds the QUASI-STATIC pair: the scheduled `F0` on its own, and the
@@ -343,6 +441,12 @@ def figure(sch, lin, save_dir=None, expected=False):
     the integrated curve is what closing `K_cut`/`C_cut` around the plant and
     letting it ring actually bought - and the distance from them to the
     simulation is what a purely static compliance estimate would have got wrong.
+
+    `lin_other` overlays a THIRD deviation curve - the same cut integrated
+    against a different plant (`compare_linear.main`'s `--pose-schedule` passes
+    the frozen start-pose one here when `lin` is the pose-scheduled one, or vice
+    versa), so the gap between the two linear curves is what re-linearising
+    along the path changed, isolated from what either owes to the simulation.
     """
     # Only force Agg when the figure is going to a file. Showing one has to keep
     # whatever interactive back end is configured, or `plt.show()` does nothing.
@@ -377,6 +481,11 @@ def figure(sch, lin, save_dir=None, expected=False):
                 label="coupled simulation" if j == 0 else None)
         ax.plot(t, lin["dx_um"][:, j], color=plots.MODEL, lw=1.4, ls=(0, (4, 2)),
                 label="linear, integrated" if j == 0 else None)
+        if lin_other is not None:
+            ax.plot(t, lin_other["dx_um"][:, j], color=plots.C3, lw=1.2,
+                    ls=(0, (1, 1)),
+                    label=(lin_other_label or "linear, other plant")
+                    if j == 0 else None)
         if expected:
             ax.plot(t, sch["qs_dev_um"][:, j], color=plots.C4, lw=1.2,
                     ls=(0, (1, 1.6)),
@@ -429,6 +538,11 @@ def parse_args(argv=None):
                         "the run's motors carried; 'uncompensated' with all of F0")
     p.add_argument("--ds", type=float, default=2.0, metavar="MM",
                    help="arc-length spacing the cut matrices are built on")
+    p.add_argument("--pose-schedule", action="store_true",
+                   help="re-linearise the ARM (not just the cut) at each "
+                        "stability node along the path, from the run's own "
+                        "commanded joint angles, instead of freezing M/D/K at "
+                        "the start pose. Overlays both against the simulation")
     p.add_argument("--save-dir", default=None,
                    help="write the figure here instead of showing it "
                         "(off by default - the figure is shown, not saved)")
@@ -447,10 +561,18 @@ def main(argv=None):
         d = find_run(Path(a.out) if a.out else analysis.OUT,
                      a.rpm, a.teeth, a.fz, a.feed)
 
-    sch = schedule(d, ds_mm=a.ds, drive=a.drive, verbose=a.verbose)
+    sch = schedule(d, ds_mm=a.ds, drive=a.drive, pose_schedule=a.pose_schedule,
+                  verbose=a.verbose)
     lin = integrate(sch)
-    print(summary(sch, lin))
-    figure(sch, lin, a.save_dir, expected=a.expected)
+
+    lin_other, lin_other_label = None, None
+    if a.pose_schedule:
+        lin_other = integrate(sch, A_t=sch["A_t_frozen"], B_t=sch["B_t_frozen"])
+        lin_other_label = "linear, frozen start pose"
+
+    print(summary(sch, lin, lin_other=lin_other, lin_other_label=lin_other_label))
+    figure(sch, lin, a.save_dir, expected=a.expected,
+          lin_other=lin_other, lin_other_label=lin_other_label)
     return sch, lin
 
 

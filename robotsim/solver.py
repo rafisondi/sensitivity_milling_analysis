@@ -6,11 +6,40 @@ from scipy.spatial.transform import Rotation as R
 from robotsim.robot import Robot
 
 
-def _rk4_step(f, t, dt, x, theta, thetaD, tau_ext):
-    k1 = f(t, x, theta, thetaD, tau_ext)
-    k2 = f(t + dt/2, x + dt/2 * k1, theta, thetaD, tau_ext)
-    k3 = f(t + dt/2, x + dt/2 * k2, theta, thetaD, tau_ext)
-    k4 = f(t + dt, x + dt * k3, theta, thetaD, tau_ext)
+def _rk4_step(f, t, dt, x, theta, thetaD, tau_ext, theta_end=None,
+              thetaD_end=None):
+    """One RK4 step of the flexible dynamics, driven by the motor command.
+
+    THE COMMAND IS EVALUATED AT EACH STAGE'S OWN TIME when `theta_end` is given:
+    `theta` at `t`, the midpoint at `t + dt/2` for k2 and k3, `theta_end` at
+    `t + dt`. Without it every stage sees `theta` - a zero-order hold, under which
+    the spring `K (q - theta)` is driven by a motor angle that goes stale across
+    the step, and the link trails the command by a fixed fraction of it.
+
+    That trail is not small on a moving path. With no cutting force and no
+    gravity, tracking a straight line at 40 mm/s left the TCP 2.86 um behind the
+    command at dt = 109 us, 1.49 um at 55 us and 0.80 um at 27 us - first order
+    in dt, about 0.65 dt of travel, and entirely along the feed. It scales with
+    feed * dt, so it reached ~17 um at 240 mm/s and read as deflection.
+
+    `tau_ext` stays held across the step: the cutting force is sampled once per
+    step by the process engine, and interpolating it is a different question.
+    """
+    if theta_end is None:
+        th = (theta, theta, theta, theta)
+        thD = (thetaD, thetaD, thetaD, thetaD)
+    else:
+        te = np.asarray(theta_end, dtype=float)
+        tdE = thetaD if thetaD_end is None else np.asarray(thetaD_end, dtype=float)
+        th_mid = 0.5 * (theta + te)
+        thD_mid = 0.5 * (thetaD + tdE)
+        th = (theta, th_mid, th_mid, te)
+        thD = (thetaD, thD_mid, thD_mid, tdE)
+
+    k1 = f(t, x, th[0], thD[0], tau_ext)
+    k2 = f(t + dt/2, x + dt/2 * k1, th[1], thD[1], tau_ext)
+    k3 = f(t + dt/2, x + dt/2 * k2, th[2], thD[2], tau_ext)
+    k4 = f(t + dt, x + dt * k3, th[3], thD[3], tau_ext)
 
     return x + (dt / 6) * (k1 + 2*k2 + 2*k3 + k4)
 
@@ -119,10 +148,17 @@ class Solver:
         return q_full, self._calc_fkine_vec(q_full, self.reference_system)
 
     def step(self, theta: np.ndarray, thetaD: np.ndarray, f_ext: np.ndarray,
-             tau_ff: np.ndarray = None):
+             tau_ff: np.ndarray = None, theta_end: np.ndarray = None,
+             thetaD_end: np.ndarray = None):
         """Advance one step. tau_ff is an optional feedforward motor torque
         [noj] added on the flexible joints (e.g. -J(theta)^T f_ext to
-        compensate a known external preload)."""
+        compensate a known external preload).
+
+        `theta_end` / `thetaD_end` are the command at the END of the step. Pass
+        them and the RK4 stages see the command at their own times instead of a
+        hold at `theta` - see `_rk4_step` for what the hold costs. `theta` is
+        still the command at the START, and is what the force mapping and the
+        returned rigid-joint angles are built from."""
         # Assemble current full state before integration for force mapping / FK
         q_full_current = self.get_current_q_full(theta)
         tau_ext = self.robot.jacobian(q_full_current, "TCP")[:, self.robot.idx_flex].transpose() @ f_ext
@@ -133,7 +169,8 @@ class Solver:
 
         # Integrate flexible dynamics
         self.x_flex = _rk4_step(
-            self._ode_system, self.time, self.dt, self.x_flex, theta, thetaD, tau_drive
+            self._ode_system, self.time, self.dt, self.x_flex, theta, thetaD, tau_drive,
+            theta_end=theta_end, thetaD_end=thetaD_end,
         )
         self.time += self.dt
 

@@ -107,7 +107,11 @@ def simulate(cfg, feedforward=None, *, path=None, preload_i=None,
     for i, ti in enumerate(t):
         xy_mm = sim.tcp_w_mm(theta_cmd[i])                  # deflected tool centre
         f_w = process.step(xy_mm, mill.omega_rad_s * ti)    # -> cutting force [N]
+        # the command at the END of this step too, so the RK4 stages track the
+        # moving command instead of holding it - see robotsim.solver._rk4_step
+        j = min(i + 1, len(t) - 1)
         sim.step(theta_cmd[i], thetaD_cmd[i],               # -> deflects the joints
+                 theta_end=theta_cmd[j], thetaD_end=thetaD_cmd[j],
                  f_ext=sim.wrench_from_force_w(f_w, preload_i),
                  tau_ff=tau_at(i))
 

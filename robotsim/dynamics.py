@@ -254,11 +254,16 @@ class Simulator:
         self._t, self._theta, self._q, self._fk, self._f = [], [], [], [], []
         return self
 
-    def step(self, theta, thetaD=None, f_ext=None, tau_ff=None):
+    def step(self, theta, thetaD=None, f_ext=None, tau_ff=None, theta_end=None,
+             thetaD_end=None):
         """Advance one `sim_dt`. Returns (q_full, fk) — the deflected state after.
 
-        f_ext  (6, 1) external TCP wrench, base frame — see `wrench_from_force_w`
-        tau_ff (n,)   feedforward motor torque — see `tau_ff`
+        f_ext      (6, 1) external TCP wrench, base frame — see `wrench_from_force_w`
+        tau_ff     (n,)   feedforward motor torque — see `tau_ff`
+        theta_end  (n,)   the command at the END of the step. Pass it on any
+                          moving path: without it the integrator holds `theta`
+                          across the step and the link trails the command by
+                          about 0.65 dt of travel - see `robotsim.solver._rk4_step`
 
         WHAT GETS RECORDED IS THE STATE AT `self.time`, NOT AFTER THE STEP.
 
@@ -290,7 +295,12 @@ class Simulator:
             self._fk.append(fk_now)
             self._f.append(np.asarray(f_ext, dtype=float).ravel().copy())
 
-        _, q_full, _, fk = self.solver.step(theta, thetaD, f_ext, tau_ff=tau_ff)
+        _, q_full, _, fk = self.solver.step(
+            theta, thetaD, f_ext, tau_ff=tau_ff,
+            theta_end=(None if theta_end is None
+                       else np.asarray(theta_end, dtype=float).reshape(-1)),
+            thetaD_end=(None if thetaD_end is None
+                        else np.asarray(thetaD_end, dtype=float).reshape(-1)))
         self.time += self.dt
         return q_full, fk
 
