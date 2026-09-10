@@ -42,11 +42,32 @@ very axis this sweep varies. At 20 steps per tooth that showed up as a 29-point
 swing in the one-tooth force error, purely from where the `dt` clamp landed.
 
 A fixed `dt` removes `N` from that: steps through the cut become a function of
-the spindle speed alone, 113 at 1000 rpm down to 11 at 10000 rpm. The price is
+the spindle speed alone, 104 at 1000 rpm down to 10 at 10000 rpm. The price is
 that the cells no longer cost the same - the pass duration goes as `1/(rpm N)`,
-so `1000/z1` is 520k steps against 6k for `10000/z8` - and that one cell,
-`10000 rpm` with eight teeth, sits at 7.5 steps per TOOTH, just under the 8 where
-`MillConfig.summary` warns the tooth harmonics alias. Everything else clears it.
+so `1000/z1` is around 480k steps against 6k for `10000/z8` - and that one cell
+sits at 6.9 steps per TOOTH, under the 8 where `MillConfig.summary` warns the
+tooth harmonics alias. Everything else clears it.
+
+AND THE STEP MUST NOT DIVIDE THE REVOLUTION EVENLY
+
+`SIM_DT` is 1.09375e-4 rather than a round 1e-4, and the odd value is the whole
+point. When `60/(rpm dt)` is an exact integer the tooth samples the SAME angular
+positions on every revolution, so whatever quadrature error the discretised
+engagement arc carries repeats identically and never averages out over the pass.
+
+A round `dt = 1e-4` is maximally bad here: it locks at five of the six grid
+speeds, and the damage is not subtle. At 7500 rpm the engine's plateau force came
+out 4.25% off the surrogate; at 7501 rpm - a 0.013% change in spindle speed, and
+no change in physics worth the name - the same comparison is 0.26% off, and the
+force direction error drops from 1.10 deg to 0.03 deg. The one speed in the grid
+that was accurate under `1e-4` was 3333 rpm, which is also the only one whose
+steps per revolution was not an integer.
+
+This value maximises the distance from an integer over all 24 cells (worst case
+0.14 of a step, against 0.00 for `1e-4`), so the sampling phase drifts across the
+~100 revolutions of a pass and the error averages away. Measured on three probe
+cells, unlocking took 5000/7500/10000 rpm from +1.10/-4.25/-2.48% to
++0.63/+0.26/-0.02%.
 
 `--steps-per-tooth` is still there to run the old rule deliberately.
 
@@ -94,8 +115,10 @@ ROW_RPM = (3333.0, 5000.0, 7500.0)
 ROW_FEED = 40.0
 
 #: Integration step [s], held fixed across the sweep. See the module docstring
-#: for why this rather than a fixed number of steps per tooth.
-SIM_DT = 1.0e-4
+#: for why this rather than a fixed number of steps per tooth - and why it is
+#: this ODD value rather than a round 1e-4, which divides the revolution exactly
+#: at five of the six grid speeds and pins the angular sampling phase.
+SIM_DT = 1.09375e-4
 
 #: Dexel raster [mm]. At the grid's `fz` this is 18 chip pixels in every cell,
 #: comfortably clear of the 2 px floor where the binary raster loses the chip.
