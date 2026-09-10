@@ -216,6 +216,12 @@ def parse_args(argv=None):
                    help="axial depth [mm] (default: the config's 1.0)")
     p.add_argument("--ae", type=float, default=None, metavar="MM",
                    help="radial engagement [mm]")
+    p.add_argument("--part-length", type=float, default=None, metavar="MM",
+                   help="stock length [mm]; the engaged span, and so the ceiling "
+                        "on every dynamic measurement, is set by this")
+    p.add_argument("--part-width", type=float, default=None, metavar="MM",
+                   help="stock width [mm]; trim it when lengthening the part - "
+                        "raster memory goes as length x width")
     p.add_argument("--raster", type=float, default=RASTER_MM, metavar="MM",
                    help="dexel raster [mm]; also sets the chip-pixel guard")
     p.add_argument("--sim-dt", type=float, default=SIM_DT, metavar="S",
@@ -260,6 +266,10 @@ def argv_for(c, a, sweep_runs: Path, simulate: bool) -> list:
         argv += ["--ap", repr(float(a.ap))]
     if a.ae is not None:
         argv += ["--ae", repr(float(a.ae))]
+    if a.part_length is not None:
+        argv += ["--part-length", repr(float(a.part_length))]
+    if a.part_width is not None:
+        argv += ["--part-width", repr(float(a.part_width))]
     if not simulate:
         argv += ["--predict-only"]
     if a.no_plots or a.no_cell_plots:
@@ -354,6 +364,8 @@ def main(argv=None):
                      "steps_per_tooth": (None if a.steps_per_tooth is None
                                          else float(a.steps_per_tooth)),
                      "feed_profile": str(a.feed_profile),
+                     "part_length_mm": a.part_length,
+                     "part_width_mm": a.part_width,
                      "raster_mm": float(a.raster), "simulated": bool(a.simulate),
                      "skipped_simulation": skipped})
 

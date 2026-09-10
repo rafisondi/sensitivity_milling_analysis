@@ -58,6 +58,14 @@ def parse_args(argv=None):
                    help="axial depth = part height [mm]")
     g.add_argument("--ae", type=float, default=None, metavar="MM",
                    help="radial engagement [mm]")
+    g.add_argument("--part-length", type=float, default=None, metavar="MM",
+                   help="stock length [mm]; this is the knob that sets how much "
+                        "CUT there is, and every dynamic measurement is bounded "
+                        "by it - see analysis.growth")
+    g.add_argument("--part-width", type=float, default=None, metavar="MM",
+                   help="stock width [mm]; only an ae-wide strip is milled, so "
+                        "trim this when lengthening the part - the raster is a "
+                        "grid over the whole bounding box")
     g.add_argument("--rpm", type=float, default=None, help="spindle speed")
     g.add_argument("--feed", type=float, default=None, metavar="MM_S",
                    help="max feed [mm/s]; regenerates the toolpath")
@@ -146,6 +154,7 @@ def main(argv=None):
     cfg = acfg.apply_operating_point(
         cfg, ap_mm=a.ap, ae_mm=a.ae, rpm=a.rpm, feed_mm_s=a.feed,
         n_teeth=a.teeth, fz_mm=a.fz, steps_per_tooth=a.steps_per_tooth,
+        part_length_mm=a.part_length, part_width_mm=a.part_width,
         Ktc=a.ktc, Krc=a.krc, sim_dt=a.sim_dt, raster_mm=a.raster,
         robot_model=a.robot_model)
     acfg.check_compliant(cfg)

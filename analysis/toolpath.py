@@ -13,7 +13,6 @@ replays through `runconfig._path_from_samples`.
 replay a path planned for the old one.
 """
 
-import re
 from dataclasses import replace
 
 import numpy as np
@@ -52,8 +51,10 @@ def name_for(cfg, profile="ramped") -> str:
     new feed rebuilds and overwrites the same shared file, and two runs sharing
     a workspace can each replay a path the other planned.
 
-    An existing stamp is stripped before the new one is applied, so passing a
-    config through this twice does not accumulate suffixes.
+    The name is built from the PART GEOMETRY and the feed rather than by editing
+    whatever name the config arrived with, so lengthening the stock cannot end up
+    replaying the short part's path. For the stock 100 x 60 part it produces
+    exactly the names the earlier runs used.
 
     THE STAMP CARRIES NO DECIMAL POINT. `IO.toolpath_file` resolves a name with
     `with_suffix('.npz')`, which reads everything after the last dot as an
@@ -61,10 +62,9 @@ def name_for(cfg, profile="ramped") -> str:
     `..._v39.996.npz` and then looked for at `..._v39.npz`. The separator is `p`
     for that reason, matching the run-directory convention.
     """
-    base = re.sub(r"(_flying)?_v[0-9p]+$", "",
-                  cfg.path.toolpath or acfg.BASE_TOOLPATH)
     tag = "_flying" if profile == "flying" else ""
-    return f"{base}{tag}_v{float(cfg.path.speed_mm_s):g}".replace(".", "p")
+    return (f"edge_{cfg.part.length_mm:g}x{cfg.part.width_mm:g}_constant_feed"
+            f"{tag}_v{float(cfg.path.speed_mm_s):g}").replace(".", "p")
 
 
 def ensure(cfg, *, force=False, profile="ramped", verbose=True):

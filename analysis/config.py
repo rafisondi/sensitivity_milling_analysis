@@ -64,7 +64,8 @@ def load_base(path=None, *, robot_model=None, toolpath=BASE_TOOLPATH,
 
 def apply_operating_point(cfg, *, ap_mm=None, ae_mm=None, rpm=None, feed_mm_s=None,
                           n_teeth=None, fz_mm=None, steps_per_tooth=None,
-                          max_sim_dt=MAX_SIM_DT,
+                          max_sim_dt=MAX_SIM_DT, part_length_mm=None,
+                          part_width_mm=None,
                           Ktc=None, Krc=None, Kac=None, sim_dt=None,
                           raster_mm=None, robot_model=None) -> RunConfig:
     """Move the operating point. Every argument left None keeps the config's value.
@@ -96,10 +97,34 @@ def apply_operating_point(cfg, *, ap_mm=None, ae_mm=None, rpm=None, feed_mm_s=No
     harmonics alias - and an aliased engine is indistinguishable from a model
     that broke down. Applied after `sim_dt`, so it wins if both are given, and
     clamped at `max_sim_dt` so the slow corner still resolves the arm's modes.
+
+    `part_length_mm` is how much cut there is, and it is the knob that decides
+    what the DYNAMICS can be measured from. The engaged span is the part length
+    plus twice the tool offset, so the time in cut is `(L + 2(R - ae)) / feed` -
+    and every measurement `analysis.growth` makes is bounded by it: a ring-down
+    needs about four plant time constants of record, and the smallest growth rate
+    a pass can resolve is `ln(1.2)` over its own duration. On this arm at 240
+    mm/s the stock 100 mm part gives 0.44 s, which is 1.4 time constants and a
+    growth floor of 1.2 1/s - it cannot see a ring-down at all.
+
+    `part_width_mm` is nearly free and should be cut down whenever the part is
+    lengthened. Only a strip `ae` wide is ever milled, and the dexel raster is a
+    `uint8` grid over the whole bounding box, so memory goes as `L x W`: at
+    0.01 mm a 100x60 part is 60 MB, a 600x60 one is 360 MB, and a 600x15 one is
+    back to 90 MB. The cut is identical as long as the width clears the tool,
+    which needs `ae` plus a margin, not 60 mm.
     """
     if ap_mm is not None:
         cfg = replace(cfg, part=replace(cfg.part, height_mm=float(ap_mm)),
                       mill=replace(cfg.mill, height_mm=float(ap_mm)))
+    if part_length_mm is not None or part_width_mm is not None:
+        L = float(cfg.part.length_mm if part_length_mm is None else part_length_mm)
+        W = float(cfg.part.width_mm if part_width_mm is None else part_width_mm)
+        # The name travels into `MillConfig.workpiece` and the toolpath filename,
+        # so it has to move with the geometry or a longer run would replay the
+        # short part's path.
+        cfg = replace(cfg, part=replace(cfg.part, length_mm=L, width_mm=W,
+                                        name=f"rect_edge_{L:g}x{W:g}"))
     if fz_mm is not None and feed_mm_s is not None:
         raise ValueError(
             "give either fz_mm or feed_mm_s, not both - the chip load and the "
@@ -173,6 +198,8 @@ def operating_point_row(cfg) -> dict:
         "fz_mm": float(m.feed_per_tooth_mm()),
         "ap_mm": float(cfg.part.height_mm),
         "ae_mm": float(m.radial_engagement_mm),
+        "part_length_mm": float(cfg.part.length_mm),
+        "part_width_mm": float(cfg.part.width_mm),
         "tpf_hz": float(m.spindle_rpm * m.n_teeth / 60.0),
         "tooth_period_s": float(m.tooth_period_s),
         "sim_dt": float(m.sim_dt),
