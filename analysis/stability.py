@@ -188,6 +188,33 @@ def table(stab: StabilityAlongPath, ap_crit=None) -> list:
     return rows
 
 
+def mid_node_row(stab: StabilityAlongPath, ap_crit=None, frac=0.5) -> dict:
+    """The prediction at ONE node: the one nearest `frac` of the path's arc length.
+
+    Every other `pred_*` number reduces the whole path - the worst node, the
+    trimmed plateau. This one is a single operating point, the halfway mark, which
+    is where `analysis.plant.receptance_at_fraction` linearises the arm and where
+    `analysis.pulse` taps the coupled pass. Plant pose, cut geometry and the
+    measurement are then all at the same place, and `pred_growth_mid_1_s` is the
+    `sigma_lin` the tap's decay rate is compared against.
+
+    `pred_mid_engaged` is False if the halfway mark is not cutting at all (a
+    geometry that misses the part), in which case the growth rate is the bare
+    arm's and says nothing about the cut.
+    """
+    s = np.asarray(stab.s_mm, float)
+    i = int(np.argmin(np.abs(s - float(frac) * s[-1])))
+    ap = (np.full(len(s), np.nan) if ap_crit is None
+          else np.asarray(ap_crit, float))
+    mode = (np.nan if stab.mode_hz is None else float(stab.mode_hz[i]))
+    return {"pred_mid_index": i, "pred_mid_s_mm": float(s[i]),
+            "pred_mid_engaged": bool(stab.engaged[i]),
+            "pred_mid_ae_mm": float(stab.ae_mm[i]),
+            "pred_growth_mid_1_s": float(stab.growth_rate[i]),
+            "pred_mode_mid_hz": mode,
+            "pred_ap_crit_mid_mm": float(ap[i])}
+
+
 def prediction_row(stab: StabilityAlongPath, ap_crit=None) -> dict:
     """The prediction reduced to scalars, for the run summary.
 

@@ -49,6 +49,52 @@ def linear_model_from_robot(cfg, *, frame="base", name=None) -> LinearModel:
         name=name or f"{cfg.scene.robot_model} @ start pose")
 
 
+def commanded_theta_at(setup, frac=0.5, *, verbose=False):
+    """(robot, theta (n,), t [s], s [mm]) - the COMMANDED joint angles where the
+    path has covered `frac` of its own arc length.
+
+    Solved by the same whole-path IK the coupled pass runs (`solve_joints`), so
+    the pose is the one the simulation actually commands there, on the same
+    branch - a single-point IK seeded from the start pose can land on another
+    wrist configuration once the workpiece is turned far enough. `setup` is an
+    `analysis.stability.Setup`, whose `scene` is the PLACED scene and `path` the
+    replayed toolpath.
+    """
+    from analysis.pulse import path_arclength_mm, time_at_fraction
+    from fastsim.coupled import solve_joints
+
+    robot, joints = solve_joints(setup.scene, setup.path, verbose=verbose)
+    t_star = time_at_fraction(setup.path, frac)
+    theta = np.array([np.interp(t_star, joints.t, joints.theta[:, j])
+                      for j in range(joints.theta.shape[1])])
+    s_star = float(frac) * float(path_arclength_mm(setup.path)[-1])
+    return robot, theta, t_star, s_star
+
+
+def receptance_at_fraction(setup, frac=0.5, *, frame="base", verbose=False):
+    """`Receptance` of the arm linearised at the halfway mark (or any `frac`).
+
+    The start-pose model freezes M/D/K where the pass BEGINS, while the cut the
+    stability verdict is about happens along the edge - and once the workpiece is
+    turned, the arm configuration at the start and in the middle of the edge
+    differ by the whole swing of the path. Linearising at the commanded pose half
+    way along puts the plant where the steady cut is. Static linearisation
+    (`thetaD = thetaDD = 0`), the same as the start-pose model, so the two differ
+    only in WHERE they are taken.
+
+    Returns `(receptance, info)`; `info` carries the pose for the run record.
+    """
+    robot, theta, t_star, s_star = commanded_theta_at(setup, frac, verbose=verbose)
+    model = tcp_linear_model(
+        robot, theta, gravity_on=bool(setup.scene.gravity_on),
+        ee_frame=setup.scene.ee_frame, frame=frame,
+        name=f"{setup.scene.robot_model} @ {100 * frac:g}% of path")
+    info = {"plant_pose_frac": float(frac), "plant_pose_t_s": float(t_star),
+            "plant_pose_s_mm": float(s_star),
+            "plant_pose_deg": [float(v) for v in np.degrees(theta)]}
+    return Receptance.from_mdk(model), info
+
+
 def receptance_from_robot(cfg, **kw) -> Receptance:
     """`linear_model_from_robot` -> `Receptance.from_mdk`, the common path."""
     return Receptance.from_mdk(linear_model_from_robot(cfg, **kw))

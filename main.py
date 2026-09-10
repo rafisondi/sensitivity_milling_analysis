@@ -103,6 +103,27 @@ def parse_args(argv=None):
                    choices=("both", "damping", "stiffness", "none"),
                    help="which cut terms the prediction closes")
 
+    g.add_argument("--linearize-at", type=float, default=None, metavar="FRAC",
+                   help="linearise the arm at the commanded pose FRAC of the way "
+                        "along the path (0.5 = the halfway mark) instead of at the "
+                        "start pose, and report the prediction at that node")
+
+    g = p.add_argument_group("the growth-rate tap")
+    g.add_argument("--pulse-at", type=float, default=None, metavar="FRAC",
+                   help="tap the TCP at FRAC of the path during the coupled pass. "
+                        "Run once with and once without it and subtract - see "
+                        "analysis.pulse. Default off")
+    g.add_argument("--pulse-force", type=float, default=20.0, metavar="N",
+                   help="tap magnitude [N]")
+    g.add_argument("--pulse-ms", type=float, default=5.0, metavar="MS",
+                   help="tap duration [ms]")
+    g.add_argument("--pulse-dir", default="auto", metavar="X,Y,Z|auto",
+                   help="tap direction, workpiece frame (normalised). 'auto' "
+                        "(default) taps along the input that best excites the "
+                        "LEAST-DAMPED closed-loop mode at the tap node, so the "
+                        "response is dominated by the mode whose rate is being "
+                        "measured; needs --linearize-at, else falls back to 1,1,1")
+
     g = p.add_argument_group("the DC compensation")
     g.add_argument("--no-compensate", action="store_true",
                    help="leave the motors idle; the joint springs carry the "
@@ -173,7 +194,15 @@ def main(argv=None):
     say(setup.summary())
 
     # ── 2. the linear replacement for the arm ────────────────────────────────
-    receptance = plant.receptance_from_robot(cfg)
+    pose_info = {"plant_pose_frac": None}
+    if a.linearize_at is not None:
+        receptance, pose_info = plant.receptance_at_fraction(
+            setup, a.linearize_at, verbose=a.verbose)
+        say(f"plant    linearised at {100 * a.linearize_at:g}% of the path "
+            f"(s = {pose_info['plant_pose_s_mm']:.1f} mm, "
+            f"t = {pose_info['plant_pose_t_s']:.3f} s)")
+    else:
+        receptance = plant.receptance_from_robot(cfg)
     say(plant.compliance_report(receptance, setup.scene))
 
     # ── 3-4. the prediction, node by node along the trajectory ───────────────
@@ -189,6 +218,13 @@ def main(argv=None):
     wT = np.asarray(stab.omega_T(), float)
     row["omega_T_max"] = float(np.nanmax(wT)) if np.isfinite(wT).any() else np.nan
     row["tooth_trunc_frac"] = 0.5 * row["omega_T_max"] ** 2
+    row.update(pose_info)
+    tap = _tap_spec(a)
+    if a.linearize_at is not None:
+        row.update(stability.mid_node_row(stab, ap_crit, a.linearize_at))
+        extra, tap = _linear_tap(stab, receptance, setup, tap,
+                                 auto_dir=str(a.pulse_dir).lower() == "auto")
+        row.update(extra)
     say(_prediction_block(row))
 
     # ── 5. the mean-force feedforward ────────────────────────────────────────
@@ -207,6 +243,7 @@ def main(argv=None):
         say("")
         run = sim_coupled.simulate(cfg, ff if compensated else None,
                                    steady_state=a.steady_state,
+                                   pulse=(tap if a.pulse_at is not None else None),
                                    verbose=a.verbose)
         row.update(report.chatter_metrics(run, setup.mill,
                                           modes_hz=receptance.modes_hz))
@@ -243,6 +280,96 @@ def main(argv=None):
         say(f"         {k:<18} {Path(v).relative_to(d)}")
     (d / "summary.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
     return row
+
+
+def _tap_spec(a):
+    """The `Pulse` this run would apply (always built - its timing also sets the
+    linear side's fit window, pulse or not)."""
+    from analysis.pulse import Pulse
+    if str(a.pulse_dir).lower() == "auto":
+        d = (1.0, 1.0, 1.0)            # resolved from the modes in `_linear_tap`
+    else:
+        d = tuple(float(v) for v in str(a.pulse_dir).split(","))
+        if len(d) != 3:
+            raise SystemExit(f"--pulse-dir needs three components, got {a.pulse_dir!r}")
+    at = a.pulse_at if a.pulse_at is not None else (
+        a.linearize_at if a.linearize_at is not None else 0.5)
+    return Pulse(at_frac=float(at), force_N=float(a.pulse_force),
+                 duration_s=1e-3 * float(a.pulse_ms), dir_w=d)
+
+
+def _dominant_input(A, B):
+    """(3,) unit input that best excites the least-damped mode of `A`.
+
+    With left eigenvector `w` of the dominant eigenvalue, an input `u` enters that
+    mode as `w^H B u`. For a real `u` the magnitude is maximised by the top right
+    singular vector of `[Re(w^H B); Im(w^H B)]`. Tapping along it makes the
+    response one mode rather than a beat between several, which is what lets an
+    envelope fit over ~3 time constants recover that mode's rate.
+    """
+    from scipy.linalg import eig
+    lam, wl = eig(A, left=True, right=False)
+    k = int(np.argmax(lam.real))
+    c = wl[:, k].conj() @ B
+    _u, _s, vt = np.linalg.svd(np.vstack([c.real, c.imag]))
+    return vt[0] / np.linalg.norm(vt[0])
+
+
+def _linear_tap(stab, receptance, setup, tap, *, auto_dir=False):
+    """(row fields, tap) - sigma_lin_fit, the fit window, and the tap direction.
+
+    The tap through the linear closed loop at the node nearest the pulse,
+    fitted with the same estimator as the coupled pass - so the sweep can tell
+    an estimator limit from a model error. The window is stored in the row and
+    reused, unchanged, for the twin-run fit.
+    """
+    from dataclasses import replace as _replace
+
+    from analysis import pulse as pmod
+    from stabsim.stability import closed_loop_matrix
+
+    s = np.asarray(stab.s_mm, float)
+    eng = np.asarray(stab.engaged, bool)
+    out = {"pulse_at_frac": tap.at_frac, "pulse_force_N": tap.force_N,
+           "pulse_ms": 1e3 * tap.duration_s, "pulse_dir_mode": (
+               "auto" if auto_dir else "fixed"),
+           "pred_pulse_fit_1_s": np.nan, "pred_pulse_fit_r2": np.nan}
+    if not eng.any():
+        out["pulse_dir_w"] = ",".join(f"{v:.4g}" for v in tap.dir_w)
+        return out, tap
+    t_pulse = pmod.time_at_fraction(setup.path, tap.at_frac)
+    t_exit = pmod.time_at_s(setup.path, float(s[eng].max()))
+    lam = float(np.linalg.eigvals(receptance.A).real.max())
+    tau = -1.0 / lam if lam < 0 else 0.32
+    modes = np.asarray(receptance.modes_hz, float)
+    modes = modes[np.isfinite(modes) & (modes > 0)]
+    f_low = float(modes.min())
+    band = (0.4 * f_low, 2.5 * float(modes.max()))
+    t0, t1, t_min = pmod.fit_window(t_pulse, tap.duration_s, t_exit, tau, f_low)
+    out.update({"pulse_t_s": t_pulse, "pulse_fit_t0_s": t0, "pulse_fit_t1_s": t1,
+                "pulse_fit_ok": bool(t1 - t0 >= t_min),
+                "pulse_band_lo_hz": band[0], "pulse_band_hi_hz": band[1],
+                "pulse_f_lowest_hz": f_low, "plant_tau_s": tau})
+    i = int(np.argmin(np.abs(s - pmod.path_arclength_mm(setup.path)[-1]
+                             * tap.at_frac)))
+    K = None if stab.K_p is None else stab.K_p[i]
+    C = None if stab.C_p is None else stab.C_p[i]
+    # plant frame <-> workpiece frame for the force
+    R_pw = (np.eye(3) if receptance.frame == "workpiece"
+            else np.asarray(setup.scene.R_iw, float))
+    if auto_dir:
+        u_plant = _dominant_input(closed_loop_matrix(receptance, K, C),
+                                  receptance.B)
+        tap = _replace(tap, dir_w=tuple(float(v) for v in R_pw.T @ u_plant))
+    out["pulse_dir_w"] = ",".join(f"{v:.4g}" for v in tap.dir_w)
+    if t1 - t0 < t_min:
+        return out, tap
+    f_plant = R_pw @ tap.force_w()
+    sig, r2 = pmod.linear_pulse_rate(
+        receptance, K, C, f_plant, tap, fit_t0_rel=t0 - t_pulse,
+        fit_t1_rel=t1 - t_pulse, band=band, f_lowest_hz=f_low)
+    out.update({"pred_pulse_fit_1_s": sig, "pred_pulse_fit_r2": r2})
+    return out, tap
 
 
 def _prediction_block(row) -> str:
