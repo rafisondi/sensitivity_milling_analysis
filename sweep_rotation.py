@@ -2,8 +2,18 @@
 
     python sweep_rotation.py                     the linear side, plots, no sim
     python sweep_rotation.py --simulate           every cell, coupled  (long)
-    python sweep_rotation.py --simulate --cells -30,0,30
+    python sweep_rotation.py --simulate --cells 3000/90,5000/0
     python sweep_rotation.py --resume             skip cells already on disk
+
+THE GRID
+
+`alpha` runs the full half-turn, 0 to 180 deg in 15 deg steps - past 180 the
+workpiece is back to a mirror of the arc already swept, so nothing past it adds
+a new arm/feed-direction pairing. It is crossed with three spindle speeds, 3000,
+5000 and 10000 rpm, teeth held at 4 throughout: not because rpm and alpha are
+expected to interact strongly, but because `C_cut` alone (the process-damping
+term) scales as `1/Omega`, so whatever directional sensitivity the plant's
+anisotropy produces is not obviously the same size at every speed.
 
 THE QUESTION
 
@@ -58,9 +68,13 @@ config are untouched.
 
 REACHABILITY IS THE REAL LIMIT HERE, NOT RESOLUTION
 
-There is no dt/raster story on this axis - rpm, teeth and ae are all held at
-the baseline, so the cut itself is identical at every cell. What CAN fail is
-the arm: swinging a ~150 mm path around a fixed anchor by a large `alpha` can
+Teeth and `ae` are held at the baseline throughout, so the CUT is identical at
+every column of the grid; `rpm` moves across `RPM_LIST` at fixed `fz`, the same
+invariant `sweep.py` holds for its own rpm axis, so `SIM_DT` stays fixed rather
+than re-derived (4 teeth clears the steps-per-tooth floor comfortably even at
+10000 rpm, unlike the 8-tooth corner that needed the odd-dt argument there).
+What CAN fail is the arm: swinging a ~150 mm path around a fixed anchor by a
+large `alpha` can
 walk the far end toward a joint limit, a wrist singularity or simply out of
 reach, and the IK residual `StartPose.describe` reports (or an outright
 solver exception) is the signal, not a resolution parameter. Cells fail
@@ -86,12 +100,17 @@ BASE_CONFIG = REPO / "configs" / "base.json"
 GEN_CONFIG_DIR = REPO / "configs" / "_sweep_rotation"
 
 #: The rotation axis [deg], about the workpiece's own extrusion axis Z_w.
-#: 0 reproduces the committed baseline exactly.
-ALPHA_DEG = (-90.0, -60.0, -45.0, -30.0, -15.0, 0.0, 15.0, 30.0, 45.0, 60.0, 90.0)
+#: 0 reproduces the committed baseline exactly (rpy yaw -90).
+ALPHA_DEG = tuple(float(a) for a in range(0, 181, 15))
+
+#: The spindle-speed axis [rpm], crossed with ALPHA_DEG.
+RPM_LIST = (3000.0, 5000.0, 10000.0)
 
 #: Held fixed at the base config's own operating point - only the direction the
-#: job is presented to the arm moves.
-RPM = 3333.0
+#: job is presented to the arm (and, on the second axis, how fast it turns)
+#: moves. `fz`, not `feed`, is what is held fixed across RPM_LIST - see
+#: `analysis.config.apply_operating_point` on why that is the invariant to
+#: hold when rpm moves.
 TEETH = 4
 FZ = 0.18
 AE = 5.0
@@ -101,9 +120,13 @@ RASTER_MM = 0.01
 FEED_PROFILE = "flying"
 
 
-def cell_name(alpha: float) -> str:
-    tag = f"alpha{alpha:+.0f}".replace("+", "p").replace("-", "m")
-    return f"{tag}_rpm{RPM:g}_z{TEETH}"
+def cells() -> list:
+    """The (rpm, alpha) grid, rpm-major so a partial run fills one speed first."""
+    return [(rpm, alpha) for rpm in RPM_LIST for alpha in ALPHA_DEG]
+
+
+def cell_name(rpm: float, alpha: float) -> str:
+    return f"alpha{alpha:03.0f}_rpm{rpm:g}_z{TEETH}"
 
 
 def config_for(alpha: float) -> Path:
@@ -125,14 +148,21 @@ def config_for(alpha: float) -> Path:
     sc["R_cut_rpy_deg"] = rpy
 
     GEN_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    out = GEN_CONFIG_DIR / f"{cell_name(alpha)}.json"
+    out = GEN_CONFIG_DIR / f"alpha{alpha:03.0f}.json"
     out.write_text(json.dumps(d, indent=2), encoding="utf-8")
     return out
 
 
 def parse_cells(spec: str) -> set:
-    """`"-30,0,30"` -> {-30.0, 0.0, 30.0}."""
-    return {float(v.strip()) for v in spec.split(",") if v.strip()}
+    """`"3000/90,5000/0"` -> {(3000.0, 90.0), (5000.0, 0.0)}."""
+    out = set()
+    for part in spec.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        rpm, alpha = part.split("/")
+        out.add((float(rpm), float(alpha)))
+    return out
 
 
 def parse_args(argv=None):
@@ -145,10 +175,10 @@ def parse_args(argv=None):
                    help="run the coupled pass at each cell as well as the "
                         "prediction; without this the sweep is the linear side "
                         "only")
-    p.add_argument("--cells", default=None, metavar="ALPHA,...",
-                   help="only these alpha values [deg], e.g. -30,0,30 - applies "
-                        "to the SIMULATION; the linear side always covers the "
-                        "full axis")
+    p.add_argument("--cells", default=None, metavar="RPM/ALPHA,...",
+                   help="only these (rpm, alpha) cells, e.g. 3000/90,5000/0 - "
+                        "applies to the SIMULATION; the linear side always "
+                        "covers the full grid")
     p.add_argument("--resume", action="store_true",
                    help="skip any cell that already has a summary.json")
     p.add_argument("--ap", type=float, default=None, metavar="MM",
@@ -173,12 +203,12 @@ def parse_args(argv=None):
     return p.parse_args(argv)
 
 
-def argv_for(alpha: float, cfg_path: Path, a, sweep_runs: Path,
+def argv_for(rpm: float, alpha: float, cfg_path: Path, a, sweep_runs: Path,
             simulate: bool) -> list:
     """The `main.py` command line for one cell."""
     argv = ["--config", str(cfg_path),
-            "--name", cell_name(alpha), "--out", str(sweep_runs),
-            "--rpm", repr(RPM), "--teeth", str(TEETH), "--fz", repr(FZ),
+            "--name", cell_name(rpm, alpha), "--out", str(sweep_runs),
+            "--rpm", repr(float(rpm)), "--teeth", str(TEETH), "--fz", repr(FZ),
             "--ae", repr(AE),
             "--raster", repr(float(a.raster)), "--ds", repr(float(a.ds)),
             "--sim-dt", repr(float(a.sim_dt)),
@@ -195,39 +225,50 @@ def argv_for(alpha: float, cfg_path: Path, a, sweep_runs: Path,
 
 
 def figure_alpha(path: Path, rows: list):
-    """alpha vs growth rate (both sides) and vs critical depth - one PNG."""
+    """alpha vs growth rate (both sides) and vs critical depth, one line per
+    rpm - two panels, one PNG."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    ok = [r for r in rows if r.get("alpha_deg") is not None]
-    ok.sort(key=lambda r: r["alpha_deg"])
-    alpha = [r["alpha_deg"] for r in ok]
+    ok = [r for r in rows if r.get("alpha_deg") is not None
+          and r.get("spindle_rpm") is not None]
+    rpms = sorted({float(r["spindle_rpm"]) for r in ok})
+    cmap = plt.get_cmap("viridis")
+    colours = {rpm: cmap(i / max(1, len(rpms) - 1)) for i, rpm in enumerate(rpms)}
 
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(11, 4.5))
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4.5))
 
-    ax1.plot(alpha, [r.get("pred_growth_max_trim_1_s") for r in ok],
-             "o-", label="predicted (linear)", color="tab:blue")
-    sim_a = [r["alpha_deg"] for r in ok if r.get("sim_valid")]
-    sim_g = [r.get("sim_growth_1_s") for r in ok if r.get("sim_valid")]
-    if sim_a:
-        ax1.plot(sim_a, sim_g, "s-", label="measured (coupled)", color="tab:red")
+    for rpm in rpms:
+        sub = sorted((r for r in ok if float(r["spindle_rpm"]) == rpm),
+                    key=lambda r: r["alpha_deg"])
+        alpha = [r["alpha_deg"] for r in sub]
+        c = colours[rpm]
+        ax1.plot(alpha, [r.get("pred_growth_max_trim_1_s") for r in sub],
+                 "o-", color=c, label=f"{rpm:g} rpm  predicted")
+        sim = [(r["alpha_deg"], r["sim_growth_1_s"]) for r in sub if r.get("sim_valid")]
+        if sim:
+            sa, sg = zip(*sim)
+            ax1.plot(sa, sg, "s--", color=c, mfc="none",
+                     label=f"{rpm:g} rpm  measured")
+        ax2.plot(alpha, [r.get("pred_ap_crit_trim_mm") for r in sub], "o-",
+                 color=c, label=f"{rpm:g} rpm")
+
     ax1.axhline(0.0, color="black", lw=0.8)
-    ax1.axvline(0.0, color="grey", lw=0.8, ls=":", label="committed baseline")
+    ax1.axvline(0.0, color="grey", lw=0.8, ls=":")
     ax1.set_xlabel("workpiece rotation  alpha  [deg]")
     ax1.set_ylabel("growth rate  [1/s]")
     ax1.set_title("growth rate vs cut direction")
-    ax1.legend()
+    ax1.legend(fontsize=7.5)
 
-    ax2.plot(alpha, [r.get("pred_ap_crit_trim_mm") for r in ok], "o-",
-             color="tab:blue")
     ax2.axvline(0.0, color="grey", lw=0.8, ls=":")
     ax2.set_xlabel("workpiece rotation  alpha  [deg]")
     ax2.set_ylabel("predicted critical depth  [mm]")
     ax2.set_title("ap_crit vs cut direction")
+    ax2.legend(fontsize=7.5)
 
-    fig.suptitle(f"workpiece-rotation sweep  ({RPM:g} rpm, {TEETH} teeth, "
-                f"fz {FZ:g} mm/tooth, ae {AE:g} mm)")
+    fig.suptitle(f"workpiece-rotation sweep  ({TEETH} teeth, fz {FZ:g} mm/tooth, "
+                f"ae {AE:g} mm)")
     fig.tight_layout()
     out = path / "rotation_growth.png"
     fig.savefig(out, dpi=150)
@@ -242,26 +283,28 @@ def main(argv=None):
     runs_dir.mkdir(parents=True, exist_ok=True)
 
     want_sim = parse_cells(a.cells) if a.cells else None
+    plan = cells()
 
-    print(f"sweep    {a.name}: {len(ALPHA_DEG)} cells, alpha "
-          f"{ALPHA_DEG[0]:g}..{ALPHA_DEG[-1]:g} deg")
-    print(f"         {RPM:g} rpm, {TEETH} teeth, fz {FZ:g} mm/tooth, "
-          f"ae {AE:g} mm fixed, dt {a.sim_dt:g} s, {a.feed_profile} feed")
+    print(f"sweep    {a.name}: {len(plan)} cells, alpha "
+          f"{ALPHA_DEG[0]:g}..{ALPHA_DEG[-1]:g} deg x rpm {RPM_LIST}")
+    print(f"         {TEETH} teeth, fz {FZ:g} mm/tooth, ae {AE:g} mm fixed, "
+          f"dt {a.sim_dt:g} s, {a.feed_profile} feed")
     if a.simulate:
-        n = len(want_sim) if want_sim else len(ALPHA_DEG)
+        n = len(want_sim) if want_sim else len(plan)
         print(f"         SIMULATING {'the ' + str(n) + ' named cell(s)' if want_sim else 'every cell'}")
     else:
         print("         prediction only (pass --simulate for coupled passes)")
     print()
 
     rows, skipped = [], []
-    for i, alpha in enumerate(ALPHA_DEG, 1):
-        name = cell_name(alpha)
+    for i, (rpm, alpha) in enumerate(plan, 1):
+        name = cell_name(rpm, alpha)
         d = runs_dir / name
 
         simulate = bool(a.simulate)
         if simulate and want_sim is not None:
-            simulate = any(abs(alpha - v) < 1e-9 for v in want_sim)
+            simulate = any(abs(rpm - r) < 1e-9 and abs(alpha - v) < 1e-9
+                           for r, v in want_sim)
 
         reusable = False
         if a.resume and (d / "summary.json").exists():
@@ -272,19 +315,19 @@ def main(argv=None):
             row.setdefault("alpha_deg", float(alpha))
             row.setdefault("simulated", bool(row.get("sim_valid", False)))
             rows.append(row)
-            print(f"[{i:2d}/{len(ALPHA_DEG)}] {name}: reused")
+            print(f"[{i:2d}/{len(plan)}] {name}: reused")
             continue
 
         cfg_path = config_for(alpha)
-        print(f"[{i:2d}/{len(ALPHA_DEG)}] {name}   alpha {alpha:+.0f} deg"
+        print(f"[{i:2d}/{len(plan)}] {name}   {rpm:g} rpm, alpha {alpha:.0f} deg"
               f"{'   [COUPLED PASS]' if simulate else ''}")
         try:
-            row = run_main.main(argv_for(alpha, cfg_path, a, runs_dir, simulate))
+            row = run_main.main(argv_for(rpm, alpha, cfg_path, a, runs_dir, simulate))
         except Exception as exc:                      # a cell is data, not a stop
             traceback.print_exc()
             print(f"         ! {name} failed: {exc}")
             rows.append({"run": name, "alpha_deg": float(alpha), "n_teeth": TEETH,
-                        "spindle_rpm": RPM, "error": str(exc)})
+                        "spindle_rpm": float(rpm), "error": str(exc)})
             continue
         row["alpha_deg"] = float(alpha)
         row["simulated"] = simulate
@@ -292,9 +335,9 @@ def main(argv=None):
 
     save.write_csv(sweep_dir / "sweep.csv", rows)
     save.write_json(sweep_dir / "sweep.json",
-                    {"name": a.name, "n_cells": len(ALPHA_DEG),
-                     "alpha_deg": list(ALPHA_DEG),
-                     "rpm": RPM, "teeth": TEETH, "fz_mm": FZ, "ae_mm": AE,
+                    {"name": a.name, "n_cells": len(plan),
+                     "alpha_deg": list(ALPHA_DEG), "rpm_list": list(RPM_LIST),
+                     "teeth": TEETH, "fz_mm": FZ, "ae_mm": AE,
                      "sim_dt": float(a.sim_dt), "feed_profile": str(a.feed_profile),
                      "raster_mm": float(a.raster), "simulated": bool(a.simulate),
                      "skipped_simulation": skipped})
