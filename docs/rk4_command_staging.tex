@@ -1,0 +1,265 @@
+\documentclass[11pt]{article}
+\usepackage[margin=2.4cm]{geometry}
+\usepackage{amsmath,amssymb,booktabs}
+\usepackage[hidelinks]{hyperref}
+
+\newcommand{\dd}{\mathrm{d}}
+\newcommand{\T}{^{\mathsf T}}
+
+\title{Stage-consistent motor command in the RK4 step\\of the flexible-joint arm}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+\vspace{-3em}
+
+\section{What was wrong, and what the change fixes}
+
+\paragraph{Symptom.} In air --- no cutting force, gravity off, the arm initialised exactly on its
+tracking equilibrium --- the TCP settled at a steady offset behind the command, along the feed.
+Its size scaled linearly with the step $h$, so it was numerical, not physical:
+\[
+  \delta p_x\;\approx\;-0.63\,v\,h
+  \qquad(h=109.4\,\mu\text{s}):\qquad
+  \begin{array}{c|cccc}
+    v\ [\text{mm/s}] & 3 & 40 & 120 & 240\\\hline
+    \delta p_x\ [\mu\text{m}] & -0.2 & -2.7 & -8.2 & -16.4
+  \end{array}
+\]
+
+\paragraph{Cause.} The integrator held the motor command constant over each RK4 step. That is
+equivalent to driving the joint springs with $\theta_f(t-\tfrac h2)$: a pure half-step delay
+(\S\ref{sec:hold}). A delay of $55\,\mu$s is negligible as a \emph{phase} at the structural modes
+($0.45^\circ$ at 23\,Hz), but as a \emph{position} it is $v\,h/2$ --- and the command moves fast
+relative to the deflections being measured.
+
+\paragraph{Why it mattered here.}
+\begin{itemize}
+  \item The quantity under study, the cut-induced deflection, is $1$--$20\,\mu$m: the same order as
+        the artefact.
+  \item At fixed chip load the feed spans $80\times$ across the tooth-passing sweep
+        ($3$--$240$\,mm/s), so the artefact was not a constant offset but a \emph{trend along the
+        sweep axis} ($0.2$ to $16\,\mu$m), indistinguishable from a physical effect of rpm and
+        tooth count.
+  \item The scheme was first order in $h$ regardless of RK4, so refining $h$ moved the answer.
+\end{itemize}
+
+\paragraph{Effect on the model/simulation comparison.} 10000\,rpm, 4 teeth, $v=120$\,mm/s,
+engaged-span DC deviation [$\mu$m]:
+\begin{center}
+\begin{tabular}{lrrr}
+\toprule
+ & hold & stage-consistent & linear model \\
+\midrule
+$x$ & 2.96  & 11.27 & 11.34 \\
+$y$ & $-0.16$ & $-0.14$ & $-0.24$ \\
+$z$ & 16.97 & 18.84 & 17.04 \\
+\bottomrule
+\end{tabular}
+\end{center}
+\begin{itemize}
+  \item $x$: the apparent $8.4\,\mu$m model error was the integrator. After the change the linear
+        model and the simulation agree to $0.07\,\mu$m.
+  \item $z$: the hold also shifted $z$ (by $-1.87\,\mu$m, \S\ref{sec:offset}) and happened to land
+        it on the model, hiding a real $1.8\,\mu$m ($10\%$) discrepancy that is now visible.
+  \item Forces are unchanged ($-97.13$\,N in both), so every force result stands.
+\end{itemize}
+
+\paragraph{Result.} Evaluating the command at each stage's own time removes the delay. The
+in-air offset becomes $-0.11\,\mu$m \emph{at every} $h$ --- converged, and physical
+(\S\ref{sec:new}). The input error drops from $\mathcal O(h)$ to $\mathcal O(h^2)$ at no extra
+cost. The rest of this note derives both statements.
+
+\section{Model}
+
+Joints split into flexible and rigid, $q=(q_f,q_r)\in\mathbb R^{n_f}\times\mathbb R^{n_r}$.
+The motor command $\theta(t)\in\mathbb R^{n}$ is a known function of time, available on the
+simulation grid only as samples $\theta_n=\theta(t_n)$, $t_n=nh$. Rigid joints are prescribed,
+$q_r\equiv\theta_r$. The flexible joints obey
+\begin{equation}
+  \ddot q_f=\Phi\big(q,\dot q,\tau_u+\tau_{\mathrm{ext}}\big),\qquad
+  \tau_u=-K\,(q_f-\theta_f)-D\,(\dot q_f-\dot\theta_f),
+  \label{eq:model}
+\end{equation}
+with $\Phi$ the forward dynamics under the prescribed rigid joints, $K,D$ diagonal, and
+$\tau_{\mathrm{ext}}=J_f\T f_{\mathrm{ext}}$. With $x=(q_f,\dot q_f)$ and $u=(\theta,\dot\theta)$,
+\begin{equation}
+  \dot x=f\big(x,u(t),\tau_{\mathrm{ext}}(t)\big)=:F(t,x).
+\end{equation}
+The system is non-autonomous only through the command and the external torque.
+
+\section{Classical RK4}
+
+For $\dot x=F(t,x)$,
+\begin{align*}
+  k_1&=F(t_n,\;x_n), &
+  k_2&=F(t_n+\tfrac h2,\;x_n+\tfrac h2k_1),\\
+  k_3&=F(t_n+\tfrac h2,\;x_n+\tfrac h2k_2), &
+  k_4&=F(t_n+h,\;x_n+hk_3),
+\end{align*}
+\begin{equation}
+  x_{n+1}=x_n+\tfrac h6\,(k_1+2k_2+2k_3+k_4).
+\end{equation}
+Nodes $c=(0,\tfrac12,\tfrac12,1)$. Local error $\mathcal O(h^5)$, global $\mathcal O(h^4)$ for
+$F\in C^4$ --- \emph{provided} stage $i$ evaluates $F$ at $t_n+c_ih$, including its explicit
+time dependence.
+
+\section{Previous scheme: zero-order hold}
+
+Every stage used the command at the start of the step:
+\begin{equation}
+  k_i=f\big(x^{(i)},\,u_n,\,\tau_n\big),\qquad i=1,\dots,4.
+\end{equation}
+This is classical RK4 applied to the \emph{held} system
+\begin{equation}
+  \dot x=f\big(x,u_h(t),\tau_h(t)\big),\qquad u_h(t)=u_n,\;\; t\in[t_n,t_{n+1}).
+\end{equation}
+RK4 solves the held system to $\mathcal O(h^4)$; the error is therefore dominated by the model
+perturbation $u_h-u$.
+
+\subsection{The hold is a half-step delay}\label{sec:hold}
+
+For smooth $u$ and $t\in[t_n,t_{n+1})$,
+\begin{equation}
+  u_h(t)-u(t)=-\dot u(t_n)\,(t-t_n)+\mathcal O(h^2),
+\end{equation}
+whose step mean is $-\tfrac h2\dot u+\mathcal O(h^2)$; the remainder is a zero-mean sawtooth at
+$1/h$. In the frequency domain the hold is
+\begin{equation}
+  H(i\omega)=\frac{1-e^{-i\omega h}}{i\omega h}
+  =e^{-i\omega h/2}\,\operatorname{sinc}\!\big(\tfrac{\omega h}{2}\big).
+\end{equation}
+In the structural band $\omega\le2\pi\cdot23$\,Hz with $h\approx10^{-4}$\,s, $\omega h\approx0.015$:
+unit gain to $\mathcal O((\omega h)^2)$ and a pure delay $h/2$. The flexible joints are driven by
+$\theta_f(t-\tfrac h2)$, and the scheme is \textbf{first order}, whatever the order of the
+integrator.
+
+\subsection{Tracking offset}\label{sec:offset}
+
+On a constant-velocity path the step-averaged spring force vanishes, so the hold contributes
+$q_f(t)=\theta_f(t-\tfrac h2)$ on top of the $h$-independent physical deflection. The rigid joints
+are not integrated and carry no delay. The TCP error is therefore
+\begin{equation}
+  \delta p\;\approx\;-\tfrac h2\,J_f(\theta)\,\dot\theta_f,
+  \qquad\text{not}\qquad -\tfrac h2\,J\dot\theta=-\tfrac h2\,v .
+  \label{eq:offset}
+\end{equation}
+On this arm the rigid wrist moves against the feed, so $J_f\dot\theta_f$ exceeds $v$.
+At 3333\,rpm, 4 teeth, $v=40$\,mm/s along workpiece $x$ (values in mm/s):
+\begin{center}
+\begin{tabular}{lrrr}
+\toprule
+ & $x$ & $y$ & $z$ \\
+\midrule
+$J\dot\theta$            & 40.00 & 0.00 & 0.00 \\
+$J_f\dot\theta_f$        & 50.06 & 0.00 & 10.78 \\
+$J_r\dot\theta_r$        & $-10.06$ & 0.00 & $-10.78$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+Eq.~\eqref{eq:offset} predicts $\delta p_x/(vh)=\tfrac12\cdot50.06/40.00=0.626$ and
+$\delta p_z/\delta p_x=10.78/50.06=0.215$.
+
+\subsection{Measured}
+
+Pure tracking in air --- no cutting force, gravity off, $v=40$\,mm/s --- steady feed-direction
+error:
+\begin{center}
+\begin{tabular}{rrrr}
+\toprule
+$h$ [$\mu$s] & $\delta p_x$ hold [$\mu$m] & $\delta p_x$ staged [$\mu$m] &
+$(\delta p_x^{\mathrm{hold}}-\delta p_x^{\mathrm{staged}})/(vh)$ \\
+\midrule
+109.38 & $-2.859$ & $-0.1105$ & 0.628 \\
+ 54.69 & $-1.485$ & $-0.1105$ & 0.628 \\
+ 27.34 & $-0.798$ & $-0.1105$ & 0.629 \\
+\bottomrule
+\end{tabular}
+\end{center}
+Exact first-order scaling, coefficient $0.628$ against $0.626$ predicted. In a full coupled pass
+at 120\,mm/s, switching scheme shifted the engaged-span DC deviation by $+8.31\,\mu$m in $x$ and
+$+1.87\,\mu$m in $z$ (predicted $8.21$ and $1.77$; ratio $0.225$ against $0.215$).
+
+\section{New scheme: stage-consistent command}\label{sec:new}
+
+Given the samples at both ends of the step, each stage takes the command at its own node:
+\begin{align}
+  k_1&=f\big(x_n,\,u_n,\,\tau_n\big), &
+  k_2&=f\big(x_n+\tfrac h2k_1,\,\bar u_n,\,\tau_n\big),\nonumber\\
+  k_3&=f\big(x_n+\tfrac h2k_2,\,\bar u_n,\,\tau_n\big), &
+  k_4&=f\big(x_n+hk_3,\,u_{n+1},\,\tau_n\big),
+\end{align}
+with $\bar u_n=\tfrac12(u_n+u_{n+1})$, applied to both $\theta$ and $\dot\theta$.
+
+\paragraph{Equivalence.} Let $u_\ell$ be the piecewise-linear interpolant of the samples. Then
+$u_\ell(t_n+c_ih)=(u_n,\bar u_n,\bar u_n,u_{n+1})$, so the scheme is classical RK4 applied to
+\begin{equation}
+  \dot x=f\big(x,u_\ell(t),\tau_h(t)\big).
+\end{equation}
+
+\paragraph{Error.} On $[t_n,t_{n+1}]$,
+\begin{equation}
+  u_\ell(t)-u(t)=-\tfrac12\,\ddot u(\xi)\,(t-t_n)(t_{n+1}-t)=\mathcal O(h^2),
+\end{equation}
+step mean $-\tfrac{h^2}{12}\ddot u$. There is no $\mathcal O(h)$ term and no delay: the
+interpolant is exact for affine $u$. The input error is $\mathcal O(h^2)$ globally, the
+integration $\mathcal O(h^4)$; overall $\mathcal O(h^2)$.
+
+On a constant-speed straight path $\ddot\theta\neq0$ only because the Jacobian rotates, so the
+residual is below measurement: $\delta p_x=-0.1105\,\mu$m at every $h$ in the table.
+
+\paragraph{The remaining offset is physical.} At steady tracking $\dot q\approx\dot\theta$,
+$\ddot q\approx\ddot\theta$, and~\eqref{eq:model} with gravity off gives, for
+$e=q_f-\theta_f$,
+\begin{equation}
+  K\,e\;\approx\;-\big[M(q)\,\ddot\theta+b(q,\dot\theta)\big]_f,
+\end{equation}
+independent of $h$: $0.11\,\mu$m here.
+
+\section{What is still held}
+
+$\tau_{\mathrm{ext}}$ is sampled once per step by the process engine and held, so the cutting
+force enters the loop with the same delay $h/2$ as before. Phase lag $\omega h/2$ at
+$h=109.4\,\mu$s:
+\begin{center}
+\begin{tabular}{lrr}
+\toprule
+ & $f$ [Hz] & $\omega h/2$ \\
+\midrule
+highest structural mode & 23   & $0.45^\circ$ \\
+tooth passing, 3333\,rpm $\times$ 4 & 222 & $4.4^\circ$ \\
+tooth passing, 10000\,rpm $\times$ 8 & 1333 & $26^\circ$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+Negligible where the regenerative loop lives; a phase shift of the forcing itself at the fastest
+cells, where the forcing lies far above the structural band.
+
+\section{Recording convention}
+
+Sample $n$ stores $(t_n,\theta_n,q_n,f_{\mathrm{ext},n})$ taken \emph{before} step $n$, so
+$\delta p_n=p(q_n)-p_{\mathrm{cmd}}(t_n)$ compares quantities at one instant. The former recorder
+stored the post-step state against $t_n$; since the post-step assembly advances only the
+integrated (flexible) joints, that added $+h\,J_f\dot\theta_f$ to every $\delta p$ --- the same
+direction as~\eqref{eq:offset}, opposite sign, twice the size. It was removed separately and is
+not part of the offsets above.
+
+\section{Implementation}
+
+\begin{center}
+\begin{tabular}{lp{0.55\textwidth}}
+\toprule
+\texttt{robotsim/solver.py}   & \texttt{\_rk4\_step}: stage commands $(u_n,\bar u_n,\bar u_n,u_{n+1})$
+                                 when \texttt{theta\_end} is given \\
+\texttt{robotsim/dynamics.py} & \texttt{Simulator.step}: forwards \texttt{theta\_end},
+                                 \texttt{thetaD\_end}; records at $t_n$ \\
+\texttt{analysis/sim\_coupled.py} & loop passes $\theta_{n+1}$, $\dot\theta_{n+1}$
+                                 (clamped at the last sample) \\
+\bottomrule
+\end{tabular}
+\end{center}
+Without \texttt{theta\_end} the step reduces to the zero-order hold, so callers that do not pass
+it are unchanged.
+
+\end{document}
