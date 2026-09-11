@@ -108,10 +108,13 @@ TEETH = (1, 2, 4, 8)
 #: 3333 rpm / 4 tooth cell reproduces the committed baseline cut.
 GRID_FZ = 0.18
 
-#: The fixed-feed rows: the null test. Only these rpms are wide enough to carry
-#: all four tooth counts - at 1000 and 2000 rpm the one- and two-tooth cells
-#: would need 1.2-2.4 mm of chip per tooth on an 8 mm-radius cutter.
-ROW_RPM = (3333.0, 5000.0, 7500.0)
+#: The fixed-feed rows: the null test. Same axis as the grid, so every figure
+#: that compares the two designs at "the same rpm" actually can. At 1000 and
+#: 2000 rpm the one- and two-tooth cells need 1.2-2.4 mm of chip per tooth on
+#: an 8 mm-radius cutter, over `sweep.MAX_FZ_FRAC_OF_RADIUS` - `simulable`
+#: already catches that and falls back those cells to prediction-only rather
+#: than simulating a chip the mechanistic force model is out of range for.
+ROW_RPM = GRID_RPM
 ROW_FEED = 40.0
 
 #: Integration step [s], held fixed across the sweep. See the module docstring
