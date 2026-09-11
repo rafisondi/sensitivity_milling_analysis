@@ -164,6 +164,15 @@ def parse_args(argv=None):
     g.add_argument("--feed-profile", default=FEED_PROFILE,
                    choices=("ramped", "flying"))
     g.add_argument("--ds", type=float, default=2.0, metavar="MM")
+    g.add_argument("--part-length", type=float, default=None, metavar="MM",
+                   help="stock length (default: config's 100 mm). The tap needs "
+                        "cutting time AFTER the halfway mark to fit a decay, and "
+                        "that time goes as length / feed: at 10000 rpm the 100 mm "
+                        "part leaves 0.16 s (0.4 tau), too little - use ~250 mm. "
+                        "Note the halfway pose moves with the length")
+    g.add_argument("--part-width", type=float, default=None, metavar="MM",
+                   help="stock width; trim it when lengthening (raster memory "
+                        "goes as length x width), keeping it above the largest ae")
     g = p.add_argument_group("the tap")
     g.add_argument("--pulse-force", type=float, default=20.0, metavar="N")
     g.add_argument("--pulse-ms", type=float, default=5.0, metavar="MS")
@@ -193,6 +202,10 @@ def argv_for(alpha, frac, a, runs_dir, *, simulate, tapped) -> list:
         argv += ["--pulse-at", repr(MID)]
     if a.ap is not None:
         argv += ["--ap", repr(float(a.ap))]
+    if a.part_length is not None:
+        argv += ["--part-length", repr(float(a.part_length))]
+    if a.part_width is not None:
+        argv += ["--part-width", repr(float(a.part_width))]
     if not simulate:
         argv += ["--predict-only"]
     if a.no_plots or a.no_cell_plots:
@@ -447,6 +460,7 @@ def main(argv=None):
         "name": a.name, "alpha_deg": list(ALPHA_DEG), "ae_frac": list(AE_FRAC),
         "diameter_mm": D, "rpm": a.rpm, "teeth": a.teeth, "fz_mm": a.fz,
         "ap_mm": a.ap, "sim_dt": a.sim_dt, "raster_mm": a.raster,
+        "part_length_mm": a.part_length, "part_width_mm": a.part_width,
         "feed_profile": a.feed_profile, "linearize_at": MID, "pulse_at": MID,
         "pulse_force_N": a.pulse_force, "pulse_ms": a.pulse_ms,
         "pulse_dir_w": a.pulse_dir, "simulated": bool(a.simulate),
