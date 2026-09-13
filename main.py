@@ -134,6 +134,14 @@ def parse_args(argv=None):
     g.add_argument("--comp-axes", default="xy",
                    help="which force components the motors carry (default xy)")
 
+    g.add_argument("--engine", default="dexel", choices=("dexel", "shapely"),
+                   help="which process backend cuts the material: the dexel "
+                        "raster (default), or the exact-polygon shapely engine "
+                        "in shapely_validation/ - the same step() interface, "
+                        "roughly 60x the cost per step. Only step 6 differs; "
+                        "the prediction, the feedforward and the outputs are "
+                        "identical either way")
+
     g = p.add_argument_group("running")
     g.add_argument("--predict-only", action="store_true",
                    help="the linear side only - no time-domain pass")
@@ -241,10 +249,17 @@ def main(argv=None):
         say("\nsim      skipped (--predict-only)")
     else:
         say("")
-        run = sim_coupled.simulate(cfg, ff if compensated else None,
-                                   steady_state=a.steady_state,
-                                   pulse=(tap if a.pulse_at is not None else None),
-                                   verbose=a.verbose)
+        kw = {}
+        if a.engine == "shapely":
+            # the shapely fork pre-carves nothing, so it has no steady_state
+            if a.steady_state:
+                raise SystemExit("--steady-state is not supported by "
+                                 "--engine shapely - see sim_coupled_shapely.py")
+        else:
+            kw["steady_state"] = a.steady_state
+        run = _simulate_fn(a.engine)(cfg, ff if compensated else None,
+                                     pulse=(tap if a.pulse_at is not None else None),
+                                     verbose=a.verbose, **kw)
         row.update(report.chatter_metrics(run, setup.mill,
                                           modes_hz=receptance.modes_hz))
         row.update(forces.force_error(run, stab, setup.mill))
@@ -264,6 +279,7 @@ def main(argv=None):
     if run is not None:
         written.update(save.save_run(d, run, decimate=a.csv_decimate))
 
+    row["engine"] = a.engine
     row["feed_profile"] = a.feed_profile
     row["csv_decimate"] = int(a.csv_decimate)
     row["coupling"] = a.coupling
@@ -280,6 +296,26 @@ def main(argv=None):
         say(f"         {k:<18} {Path(v).relative_to(d)}")
     (d / "summary.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
     return row
+
+
+def _simulate_fn(engine: str):
+    """The coupled-pass function for `engine`.
+
+    `shapely_validation/sim_coupled_shapely.py` is a fork of
+    `analysis.sim_coupled` with the process backend swapped; it lives outside the
+    package, so it is imported lazily and only when asked for - nothing about the
+    dexel path changes, and a missing shapely_validation/ only breaks
+    `--engine shapely`.
+    """
+    if engine != "shapely":
+        return sim_coupled.simulate
+    d = Path(__file__).resolve().parent / "shapely_validation"
+    if not d.is_dir():
+        raise SystemExit(f"--engine shapely needs {d}, which is not there")
+    if str(d) not in sys.path:
+        sys.path.insert(0, str(d))
+    import sim_coupled_shapely
+    return sim_coupled_shapely.simulate
 
 
 def _tap_spec(a):

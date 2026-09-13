@@ -163,6 +163,10 @@ def parse_args(argv=None):
     g.add_argument("--sim-dt", type=float, default=SIM_DT, metavar="S")
     g.add_argument("--feed-profile", default=FEED_PROFILE,
                    choices=("ramped", "flying"))
+    g.add_argument("--engine", default="dexel", choices=("dexel", "shapely"),
+                   help="process backend for the coupled passes; shapely is "
+                        "roughly 60x the cost per step, so pair it with "
+                        "--cells or --no-twin unless there is time to spare")
     g.add_argument("--ds", type=float, default=2.0, metavar="MM")
     g.add_argument("--part-length", type=float, default=None, metavar="MM",
                    help="stock length (default: config's 100 mm). The tap needs "
@@ -195,6 +199,7 @@ def argv_for(alpha, frac, a, runs_dir, *, simulate, tapped) -> list:
             "--fz", repr(float(a.fz)), "--ae", repr(frac * diameter_mm()),
             "--raster", repr(float(a.raster)), "--sim-dt", repr(float(a.sim_dt)),
             "--feed-profile", str(a.feed_profile), "--ds", repr(float(a.ds)),
+            "--engine", str(a.engine),
             "--linearize-at", repr(MID),
             "--pulse-force", repr(float(a.pulse_force)),
             "--pulse-ms", repr(float(a.pulse_ms)), "--pulse-dir", str(a.pulse_dir)]
@@ -461,7 +466,8 @@ def main(argv=None):
         "diameter_mm": D, "rpm": a.rpm, "teeth": a.teeth, "fz_mm": a.fz,
         "ap_mm": a.ap, "sim_dt": a.sim_dt, "raster_mm": a.raster,
         "part_length_mm": a.part_length, "part_width_mm": a.part_width,
-        "feed_profile": a.feed_profile, "linearize_at": MID, "pulse_at": MID,
+        "feed_profile": a.feed_profile, "engine": a.engine,
+        "linearize_at": MID, "pulse_at": MID,
         "pulse_force_N": a.pulse_force, "pulse_ms": a.pulse_ms,
         "pulse_dir_w": a.pulse_dir, "simulated": bool(a.simulate),
         "twin": not a.no_twin})
