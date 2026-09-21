@@ -5,6 +5,14 @@
     python move_wp_constantRobPose/demo.py --dy 15 --attack 45
     python move_wp_constantRobPose/demo.py --attack 30,60,90 --save
     python move_wp_constantRobPose/demo.py --dy 15 --attack 30,90,150 --simulate
+    python move_wp_constantRobPose/demo.py --ap 10 --attack 0,10,...,180 \\
+        --rpm 2000,3000,5000,7000,10000 --save --simulate
+
+`--rpm` (like `--attack`) takes a comma-separated list, so a rpm x angle GRID
+runs as one command: every rpm in the list gets its own full place + attack
+sweep, each cell tagged `..._rpm<N>` in its slug and run directory so nothing
+collides. `--ap` / `--ae` stay single-valued — sweep those by running the
+command again, or add a list for them here the same way if that's wanted next.
 
 Builds `configs/base.json` (the pose this project already uses), sets the
 operating point, then:
@@ -119,6 +127,13 @@ def summarise(rows: list):
         print(f"  {label:<34}{pred:>17.2f}{sim:>16.2f}   {verdict}")
 
 
+def parse_float_list(spec) -> list:
+    """`"2000,3000"` -> [2000.0, 3000.0]; `None` -> `[None]` (config default)."""
+    if spec is None:
+        return [None]
+    return [float(v) for v in str(spec).split(",") if v.strip()]
+
+
 def parse_args(argv=None):
     p = argparse.ArgumentParser(
         description=__doc__.splitlines()[0],
@@ -126,7 +141,9 @@ def parse_args(argv=None):
     p.add_argument("--config", default=str(REPO / "configs" / "base.json"))
     p.add_argument("--edge", type=int, default=None,
                    help="edge to cut (default: the config's own path.start_edge)")
-    p.add_argument("--rpm", type=float, default=None)
+    p.add_argument("--rpm", default=None, metavar="RPM,...",
+                   help="one spindle speed, or a comma-separated list to sweep "
+                        "(default: the config's own rpm)")
     p.add_argument("--ae", type=float, default=None, metavar="MM")
     p.add_argument("--ap", type=float, default=None, metavar="MM")
     p.add_argument("--dx", type=float, default=0.0, metavar="MM", help="move along workpiece +X")
@@ -150,47 +167,70 @@ def parse_args(argv=None):
     return p.parse_args(argv)
 
 
-def main(argv=None):
-    a = parse_args(argv)
-    cfg = RunConfig.load(a.config)
-    cfg = acfg.apply_operating_point(cfg, ap_mm=a.ap, ae_mm=a.ae, rpm=a.rpm)
+def run_operating_point(rpm, a) -> tuple:
+    """Place + optionally move + attack-sweep at one rpm. Returns (cfg, sim_rows)."""
+    tag = "" if rpm is None else f"_rpm{rpm:g}"
+    rpm_label = "" if rpm is None else f" | rpm {rpm:g}"
 
-    print(f"operating point   ap {cfg.part.height_mm:g} mm | "
+    cfg = RunConfig.load(a.config)
+    cfg = acfg.apply_operating_point(cfg, ap_mm=a.ap, ae_mm=a.ae, rpm=rpm)
+
+    print(f"\noperating point   ap {cfg.part.height_mm:g} mm | "
           f"ae {cfg.mill.radial_engagement_mm:g} mm | rpm {cfg.mill.spindle_rpm:g}\n")
 
     sim_rows = []
-    theta0 = report_step("start pose (pose-derived placement, unchanged)", cfg, None)
+    theta0 = report_step(f"start pose (pose-derived placement, unchanged){rpm_label}",
+                         cfg, None)
 
     cfg = place_at_edge_midpoint(cfg, edge_index=a.edge)
-    theta1 = report_step("placed: TCP at the edge midpoint", cfg, theta0)
+    theta1 = report_step(f"placed: TCP at the edge midpoint{rpm_label}", cfg, theta0)
     if a.save:
         GEN_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-        cfg.save(GEN_CONFIG_DIR / "01_placed.json")
-    if a.simulate:
-        sim_rows.append(("placed", simulate_step("01_placed", "placed", cfg, a)))
+        cfg.save(GEN_CONFIG_DIR / f"01_placed{tag}.json")
+
+    angles = ([float(v) for v in a.attack.split(",") if v.strip()]
+             if a.attack else [])
+    # Angle 0 (if swept) is the same cell as "placed" — skip the duplicate
+    # coupled pass rather than running it twice.
+    if a.simulate and 0.0 not in angles:
+        sim_rows.append((f"placed{rpm_label}", simulate_step(
+            f"01_placed{tag}", f"placed{rpm_label}", cfg, a)))
 
     if a.dx or a.dy or a.dz:
         cfg = move_workpiece(cfg, d_w_mm=(a.dx, a.dy, a.dz))
-        theta1 = report_step(f"moved: d_w = ({a.dx:g}, {a.dy:g}, {a.dz:g}) mm", cfg, theta1)
+        theta1 = report_step(
+            f"moved: d_w = ({a.dx:g}, {a.dy:g}, {a.dz:g}) mm{rpm_label}", cfg, theta1)
         if a.save:
-            cfg.save(GEN_CONFIG_DIR / "02_moved.json")
+            cfg.save(GEN_CONFIG_DIR / f"02_moved{tag}.json")
         if a.simulate:
-            sim_rows.append(("moved", simulate_step("02_moved", "moved", cfg, a)))
+            sim_rows.append((f"moved{rpm_label}", simulate_step(
+                f"02_moved{tag}", f"moved{rpm_label}", cfg, a)))
 
-    if a.attack:
-        # Every angle pivots about the SAME point — the edge midpoint, fixed
-        # to the part — so the angles are independent turns from one
-        # baseline, not a chained walk.
-        for angle in (float(v) for v in a.attack.split(",") if v.strip()):
-            cfg_a = attack_angle(cfg, angle)
-            label = f"attack angle {angle:g} deg (about the edge midpoint)"
-            report_step(label, cfg_a, theta1)
-            if a.save:
-                cfg_a.save(GEN_CONFIG_DIR / f"03_attack{angle:03.0f}.json")
-            if a.simulate:
-                slug = f"03_attack{angle:03.0f}"
-                sim_rows.append((f"attack {angle:g} deg",
-                                 simulate_step(slug, label, cfg_a, a)))
+    # Every angle pivots about the SAME point — the edge midpoint, fixed to
+    # the part — so the angles are independent turns from one baseline, not
+    # a chained walk.
+    for angle in angles:
+        cfg_a = attack_angle(cfg, angle)
+        label = f"attack angle {angle:g} deg (about the edge midpoint){rpm_label}"
+        report_step(label, cfg_a, theta1)
+        if a.save:
+            cfg_a.save(GEN_CONFIG_DIR / f"03_attack{angle:03.0f}{tag}.json")
+        if a.simulate:
+            slug = f"03_attack{angle:03.0f}{tag}"
+            sim_rows.append((f"attack {angle:g} deg{rpm_label}",
+                             simulate_step(slug, label, cfg_a, a)))
+
+    return cfg, sim_rows
+
+
+def main(argv=None):
+    a = parse_args(argv)
+    rpm_list = parse_float_list(a.rpm)
+
+    cfg, sim_rows = None, []
+    for rpm in rpm_list:
+        cfg, rows = run_operating_point(rpm, a)
+        sim_rows += rows
 
     print("\nAll 'max move vs previous step' figures above should read ~1e-6 deg "
           "or smaller (IK-residual noise) — the robot never actually moves; only "
