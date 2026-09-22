@@ -92,8 +92,15 @@ def simulate(cfg, feedforward=None, *, path=None, preload_i=None,
         return sim.tau_ff(theta_cmd[i], sim.wrench_from_force_w(f0[i]))
 
     # open ON the tracking equilibrium of whatever load t = 0 carries, so the run
-    # does not start by springing to it
-    f_cut0_w = (f0[0] if (steady_state and f0 is not None) else None)
+    # does not start by springing to it. The load is the WHOLE mean force, not
+    # the part the motors carry: with `axes="xy"` the axial component stays on
+    # the springs for the entire pass, and presetting them without it lands that
+    # component as a step at t = 0 - measured, it rang the arm by ~15 um for
+    # the first few revolutions of a steady-state pass.
+    f_cut0_w = None
+    if steady_state and feedforward is not None:
+        f_cut0_w = np.array([np.interp(t[0], feedforward.t, feedforward.F0_w[:, k])
+                             for k in range(3)])
     # `thetaDD_at(0)` rather than `thetaDD[0]` - the first sample of the double
     # finite difference carries an IK-seeding artefact that would preset the
     # springs for a load that is not there. See `JointTrajectory.thetaDD_at`.
