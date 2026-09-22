@@ -191,6 +191,39 @@ def run(job, *, name, out_root, plant_kind="reduced",
     return row
 
 
+def twin_row(base_row, base_dir, pulse_row, pulse_dir) -> dict:
+    """The plain pass's row plus the tap's decay rate between the two passes.
+
+    Reads both passes back from disk, so it works as well on a finished pair as
+    on one just run - which is what lets a sweep `--resume` without re-running.
+    `pulse_row` may be None (no tapped pass): the verdicts then fall back to the
+    plain pass's own growth test, as `analysis.pulse.sim_state` documents.
+    """
+    row = dict(base_row)
+    if pulse_row is not None:
+        row["pulse_sim_diverged"] = bool(pulse_row.get("sim_diverged"))
+        needed = ("pulse_t_s", "pulse_fit_t0_s", "pulse_fit_t1_s",
+                  "pulse_band_lo_hz", "pulse_band_hi_hz", "pulse_f_lowest_hz")
+        if all(np.isfinite(_num(row, k)) for k in needed):
+            row.update(pmod.twin_rate(
+                base_dir, pulse_dir, t_pulse=row["pulse_t_s"],
+                duration_s=1e-3 * row["pulse_ms"],
+                fit_t0=row["pulse_fit_t0_s"], fit_t1=row["pulse_fit_t1_s"],
+                band=(row["pulse_band_lo_hz"], row["pulse_band_hi_hz"]),
+                f_lowest_hz=row["pulse_f_lowest_hz"]))
+    row["lin_state"] = pmod.lin_state(_num(row, "pred_growth_mid_1_s"))
+    row["sim_state"] = pmod.sim_state(row)
+    return row
+
+
+def _num(row, key) -> float:
+    try:
+        v = float(row.get(key))
+        return v if np.isfinite(v) else np.nan
+    except (TypeError, ValueError):
+        return np.nan
+
+
 def run_twin(job, *, name, out_root, tap: Pulse = None, tap_at=0.5, **kw) -> dict:
     """The plain pass, the tapped pass, and the tap's decay rate between them.
 
@@ -205,25 +238,18 @@ def run_twin(job, *, name, out_root, tap: Pulse = None, tap_at=0.5, **kw) -> dic
                tapped=False, **kw)
     pulsed = run(job, name=f"{name}_pulse", out_root=out_root, tap=tap,
                  tap_at=tap_at, tapped=True, **kw)
-
-    row = dict(base)
-    row["pulse_sim_diverged"] = bool(pulsed.get("sim_diverged"))
-    needed = ("pulse_t_s", "pulse_fit_t0_s", "pulse_fit_t1_s",
-              "pulse_band_lo_hz", "pulse_band_hi_hz", "pulse_f_lowest_hz")
-    if all(np.isfinite(float(row.get(k, np.nan))) for k in needed):
-        row.update(pmod.twin_rate(
-            Path(out_root) / name, Path(out_root) / f"{name}_pulse",
-            t_pulse=row["pulse_t_s"], duration_s=1e-3 * row["pulse_ms"],
-            fit_t0=row["pulse_fit_t0_s"], fit_t1=row["pulse_fit_t1_s"],
-            band=(row["pulse_band_lo_hz"], row["pulse_band_hi_hz"]),
-            f_lowest_hz=row["pulse_f_lowest_hz"]))
-    row["lin_state"] = pmod.lin_state(row.get("pred_growth_mid_1_s"))
-    row["sim_state"] = pmod.sim_state(row)
+    row = twin_row(base, Path(out_root) / name, pulsed,
+                   Path(out_root) / f"{name}_pulse")
     save.write_json(Path(out_root) / name / "summary.json", row)
-    print(f"\ntap      sigma_sim {row.get('sim_sigma_1_s', np.nan):+.2f} 1/s "
-          f"(R2 {row.get('sim_sigma_r2', np.nan):.2f}, floor "
-          f"{row.get('sim_sigma_floor_1_s', np.nan):.2f}) | sigma_lin "
-          f"{row.get('pred_growth_mid_1_s', np.nan):+.2f} 1/s | linear tap fit "
-          f"{row.get('pred_pulse_fit_1_s', np.nan):+.2f} 1/s -> "
-          f"sim {row['sim_state']}, lin {row['lin_state']}", flush=True)
+    print()
+    print(describe_tap(row), flush=True)
     return row
+
+
+def describe_tap(row) -> str:
+    return (f"tap      sigma_sim {_num(row, 'sim_sigma_1_s'):+.2f} 1/s "
+            f"(R2 {_num(row, 'sim_sigma_r2'):.2f}, floor "
+            f"{_num(row, 'sim_sigma_floor_1_s'):.2f}) | sigma_lin "
+            f"{_num(row, 'pred_growth_mid_1_s'):+.2f} 1/s | linear tap fit "
+            f"{_num(row, 'pred_pulse_fit_1_s'):+.2f} 1/s -> "
+            f"sim {row['sim_state']}, lin {row['lin_state']}")
